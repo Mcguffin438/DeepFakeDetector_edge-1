@@ -4,6 +4,7 @@
  */
 package com.example.deepfakeguard
 
+import android.Manifest
 import android.app.*
 import android.content.Context
 import android.content.Intent
@@ -12,6 +13,7 @@ import android.os.Binder
 import android.os.Build
 import android.os.IBinder
 import android.view.WindowManager
+import androidx.annotation.RequiresPermission
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
 import org.pytorch.IValue
@@ -110,6 +112,7 @@ class DeepfakeDetectionService : Service() {
     
     override fun onBind(intent: Intent?): IBinder = binder
     
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val action = intent?.action ?: return START_NOT_STICKY
         
@@ -138,6 +141,7 @@ class DeepfakeDetectionService : Service() {
         serviceScope.launch(Dispatchers.IO) { loadDeepfakeModel() }
     }
     
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     private fun handleStartDetection(intent: Intent) {
         if (!isModelLoaded.get()) {
             Timber.w("Model not loaded yet, preparing...")
@@ -247,6 +251,7 @@ class DeepfakeDetectionService : Service() {
         return assetsModelFile
     }
     
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     private fun startAudioMonitoring() {
         if (isRecording.get()) {
             Timber.w("Audio monitoring already active")

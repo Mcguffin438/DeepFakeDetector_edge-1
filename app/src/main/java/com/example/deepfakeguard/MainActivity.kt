@@ -21,9 +21,17 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 
+//I might be using Pytorch instead of ONNX to deploy model since this app was built in Pytorch.
+//import ai.onnxruntime.OnnxTensor
+//import ai.onnxruntime.OrtEnvironment
+//import ai.onnxruntime.OrtSession
+import androidx.annotation.RequiresApi
+import java.nio.FloatBuffer
+
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
+import org.pytorch.BuildConfig
 import timber.log.Timber
 
 class MainActivity : AppCompatActivity(), ServiceConnection {
@@ -88,6 +96,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
     
+    @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
@@ -141,6 +150,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         switchAutoStart.isChecked = prefs.getBoolean("auto_start", false)
     }
     
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun setupClickListeners() {
         btnToggleService.setOnClickListener {
             toggleService()
@@ -293,6 +303,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
     
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun toggleService() {
         if (isServiceRunning()) {
             stopMonitoringService()
@@ -301,6 +312,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
     
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun startMonitoringService() {
         if (!hasAllPermissions()) {
             requestPermissions()
@@ -380,6 +392,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
      * @param audioLengthMs Duration of audio in milliseconds (-1 for auto-calculate)
      * @param callback Callback to receive the analysis result
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     fun analyzeRawAudio(
         audioData: ShortArray,
         sampleRate: Int = 16000,
@@ -463,6 +476,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
      * @param audioLengthMs Duration in ms (-1 = auto)
      * @param callback Result handler
      */
+    @RequiresApi(Build.VERSION_CODES.O)
     fun analyzeRawAudio(
         audioBytes: ByteArray,
         sampleRate: Int = 16000,
@@ -583,6 +597,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
     
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun analyzeSelectedAudioFile() {
         selectedAudioUri?.let { uri ->
             lifecycleScope.launch {

@@ -7,7 +7,9 @@ package com.example.deepfakeguard
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.telephony.TelephonyManager
+import androidx.annotation.RequiresApi
 
 import timber.log.Timber
 
@@ -19,6 +21,7 @@ class PhoneStateReceiver : BroadcastReceiver() {
         private var callerNumber: String? = null
     }
     
+    @RequiresApi(Build.VERSION_CODES.O)
     override fun onReceive(context: Context, intent: Intent) {
         try {
             when (intent.action) {
@@ -31,6 +34,7 @@ class PhoneStateReceiver : BroadcastReceiver() {
         }
     }
     
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun handlePhoneStateChange(context: Context, intent: Intent) {
         val state = intent.getStringExtra(TelephonyManager.EXTRA_STATE)
         @Suppress("DEPRECATION")
@@ -71,6 +75,7 @@ class PhoneStateReceiver : BroadcastReceiver() {
         lastState = currentState
     }
     
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun handleOutgoingCall(context: Context, intent: Intent) {
         @Suppress("DEPRECATION")
         val outgoingNumber = intent.getStringExtra(Intent.EXTRA_PHONE_NUMBER)
@@ -81,6 +86,7 @@ class PhoneStateReceiver : BroadcastReceiver() {
         prepareForCall(context, outgoingNumber, false)
     }
     
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun prepareForCall(context: Context, phoneNumber: String?, incoming: Boolean) {
         Timber.d("Preparing: $phoneNumber, incoming=$incoming")
         
@@ -98,6 +104,7 @@ class PhoneStateReceiver : BroadcastReceiver() {
         }
     }
     
+    @RequiresApi(Build.VERSION_CODES.O)
     private fun startDeepfakeDetection(context: Context, phoneNumber: String?, incoming: Boolean) {
         Timber.i("Starting detection service")
         
