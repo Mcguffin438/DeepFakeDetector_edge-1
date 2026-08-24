@@ -5,6 +5,10 @@
 package com.example.deepfakeguard
 
 import android.Manifest
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
+import java.nio.FloatBuffer
 import android.app.*
 import android.content.Context
 import android.content.Intent
@@ -16,11 +20,12 @@ import android.view.WindowManager
 import androidx.annotation.RequiresPermission
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
-import org.pytorch.IValue
-import org.pytorch.Module
-import org.pytorch.Tensor
 import timber.log.Timber
 import java.io.File
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
+import java.nio.FloatBuffer
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.*
@@ -65,7 +70,8 @@ class DeepfakeDetectionService : Service() {
     private var originalCommunicationDevice: AudioDeviceInfo? = null
     
     // ML inference
-    private var deepfakeModel: Module? = null
+    private var ortEnv: OrtEnvironment? = null
+    private var ortSession: OrtSession? = null
     private var isModelLoaded = AtomicBoolean(false)
     private val audioProcessor = AudioProcessor()
     
@@ -192,8 +198,10 @@ class DeepfakeDetectionService : Service() {
                 return
             }
             
-            Timber.d("Loading PyTorch model from file...")
-            deepfakeModel = Module.load(modelFile.absolutePath)
+            Timber.d("Loading ONNX model from file...")
+            ortEnv = OrtEnvironment.getEnvironment()
+            val sessionOptions = OrtSession.SessionOptions()
+            ortSession = ortEnv!!.createSession(modelFile.absolutePath, sessionOptions)
             isModelLoaded.set(true)
             
             Timber.i("✅ ML model loaded successfully!")
@@ -221,7 +229,7 @@ class DeepfakeDetectionService : Service() {
     
     private fun getModelFile(): File {
         // Check for model in internal storage
-        val assetsModelFile = File(filesDir, "deepfake_detector.pt")
+        val assetsModelFile = File(filesDir, "deepfake_detector.onnx")
         
         Timber.d("Model path: ${assetsModelFile.absolutePath}")
         Timber.d("Exists: ${assetsModelFile.exists()}")
@@ -231,7 +239,7 @@ class DeepfakeDetectionService : Service() {
             try {
                 Timber.d("Copying from assets/models/deepfake_detector.pt...")
                 
-                assets.open("models/deepfake_detector.pt").use { input ->
+                assets.open("models/deepfake_detector.onnx").use { input ->
                     FileOutputStream(assetsModelFile).use { output ->
                         val bytesCopied = input.copyTo(output)
                         Timber.d("Copied $bytesCopied bytes from assets")
@@ -536,7 +544,7 @@ class DeepfakeDetectionService : Service() {
     
     private suspend fun processAudioChunk(audioData: ShortArray, chunkId: Int) {
         try {
-            if (!isModelLoaded.get() || deepfakeModel == null) {
+            if (!isModelLoaded.get() || ortSession == null) {
                 return
             }
             
@@ -556,20 +564,38 @@ class DeepfakeDetectionService : Service() {
                 return
             }
             
-            // Convert features to PyTorch tensor [1, 3, 64, T]
+            // Prepare ONNX input tensor [1, 3, 64, T]
             val shape = featuresResult.shape
-            val inputTensor = Tensor.fromBlob(
-                featuresResult.features, 
-                longArrayOf(1, shape[0].toLong(), shape[1].toLong(), shape[2].toLong())
-            )
-            
-            // Run inference
-            val outputTensor = deepfakeModel!!.forward(IValue.from(inputTensor)).toTensor()
-            val output = outputTensor.dataAsFloatArray
-            
-            // Apply sigmoid to convert logits to probabilities (from training code)
+            val inputName = ortSession?.inputNames?.iterator()?.next() ?: throw Exception("ONNX model has no input")
+            val fb = FloatBuffer.wrap(featuresResult.features)
+            val onnxInput = try {
+                OnnxTensor.createTensor(ortEnv, fb, longArrayOf(1, shape[0].toLong(), shape[1].toLong(), shape[2].toLong()))
+            } catch (e: Exception) {
+                Timber.w(e, "Creating 4D ONNX tensor failed; trying flattened [1, N]")
+                OnnxTensor.createTensor(ortEnv, FloatBuffer.wrap(featuresResult.features), longArrayOf(1, featuresResult.features.size.toLong()))
+            }
+            val results = ortSession!!.run(mapOf(inputName to onnxInput))
+            val outputValue = results[0].value
+            val output: FloatArray = when (outputValue) {
+                is FloatArray -> outputValue
+                is Array<*> -> {
+                    val list = mutableListOf<Float>()
+                    for (row in outputValue) {
+                        when (row) {
+                            is FloatArray -> list.addAll(row.toList())
+                            is DoubleArray -> list.addAll(row.map { it.toFloat() })
+                        }
+                    }
+                    list.toFloatArray()
+                }
+                else -> floatArrayOf()
+            }
+            results.close()
+            onnxInput.close()
+
+            // Apply sigmoid to convert logits to probabilities (if model outputs logits)
             val sigmoidOutput = output.map { 1.0f / (1.0f + kotlin.math.exp(-it)) }
-            
+
             // Interpret results - model outputs single value, > 0.5 means fake
             val fakeProb = if (sigmoidOutput.isNotEmpty()) sigmoidOutput[0] else 0f
             val realProb = 1f - fakeProb
@@ -619,7 +645,7 @@ class DeepfakeDetectionService : Service() {
         return withContext(Dispatchers.IO) {
             try {
                 // Check if model is loaded
-                if (!isModelLoaded.get() || deepfakeModel == null) {
+                if (!isModelLoaded.get() || ortSession == null) {
                     return@withContext AudioAnalysisResult(
                         isFake = false,
                         confidence = 0f,
@@ -731,15 +757,18 @@ class DeepfakeDetectionService : Service() {
                     )
                 }
             
-                // Convert features to PyTorch tensor [1, 3, 64, T]
+                // Prepare ONNX input tensor [1, 3, 64, T]
                 val shape = featuresResult.shape
-                val inputTensor = Tensor.fromBlob(
-                    featuresResult.features, 
-                    longArrayOf(1, shape[0].toLong(), shape[1].toLong(), shape[2].toLong())
-                )
-                
-                // Validate input tensor
-                Timber.d("Input tensor shape: [${inputTensor.shape().contentToString()}]")
+                val inputName = ortSession?.inputNames?.iterator()?.next() ?: throw Exception("ONNX model has no input")
+                val fb = FloatBuffer.wrap(featuresResult.features)
+                val onnxInput = try {
+                    OnnxTensor.createTensor(ortEnv, fb, longArrayOf(1, shape[0].toLong(), shape[1].toLong(), shape[2].toLong()))
+                } catch (e: Exception) {
+                    Timber.w(e, "Creating 4D ONNX tensor failed; trying flattened [1, N]")
+                    OnnxTensor.createTensor(ortEnv, FloatBuffer.wrap(featuresResult.features), longArrayOf(1, featuresResult.features.size.toLong()))
+                }
+
+                // Validate input stats
                 val inputStats = featuresResult.features.let {
                     val min = it.minOrNull() ?: 0f
                     val max = it.maxOrNull() ?: 0f
@@ -748,22 +777,38 @@ class DeepfakeDetectionService : Service() {
                 }
                 Timber.d("Input tensor stats: $inputStats")
                 Timber.d("Feature channels: ${shape[0]}, Feature bins: ${shape[1]}, Time steps: ${shape[2]}")
-                
-                // Run inference
-                Timber.d("🔄 Running model inference...")
+
+                // Run inference with ONNX Runtime
+                Timber.d("🔄 Running ONNX inference...")
                 val inferenceStartTime = System.currentTimeMillis()
-                
-                val outputTensor = deepfakeModel!!.forward(IValue.from(inputTensor)).toTensor()
-                val output = outputTensor.dataAsFloatArray
-                
+
+                val results = ortSession!!.run(mapOf(inputName to onnxInput))
+                val outputValue = results[0].value
+                val output: FloatArray = when (outputValue) {
+                    is FloatArray -> outputValue
+                    is Array<*> -> {
+                        val list = mutableListOf<Float>()
+                        for (row in outputValue) {
+                            when (row) {
+                                is FloatArray -> list.addAll(row.toList())
+                                is DoubleArray -> list.addAll(row.map { it.toFloat() })
+                            }
+                        }
+                        list.toFloatArray()
+                    }
+                    else -> floatArrayOf()
+                }
+                results.close()
+                onnxInput.close()
+
                 val inferenceEndTime = System.currentTimeMillis()
-                Timber.d("✅ Model inference completed in ${inferenceEndTime - inferenceStartTime}ms")
-                
+                Timber.d("✅ ONNX inference completed in ${inferenceEndTime - inferenceStartTime}ms")
+
                 Timber.d("Model output (logits): ${output.joinToString()}")
-                
-                // Apply sigmoid to convert logits to probabilities (from training code)
+
+                // Apply sigmoid to convert logits to probabilities (if model outputs logits)
                 val sigmoidOutput = output.map { 1.0f / (1.0f + kotlin.math.exp(-it)) }
-                
+
                 // Interpret results - model outputs single value, > 0.5 means fake
                 val fakeProb = if (sigmoidOutput.isNotEmpty()) sigmoidOutput[0] else 0f
                 val realProb = 1f - fakeProb
@@ -838,7 +883,7 @@ class DeepfakeDetectionService : Service() {
      * Check if the service is ready for audio analysis
      */
     fun isReadyForAnalysis(): Boolean {
-        return isModelLoaded.get() && deepfakeModel != null
+        return isModelLoaded.get() && ortSession != null
     }
     
     fun getAudioSourceInfo(): String {

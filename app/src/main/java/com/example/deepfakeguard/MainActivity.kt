@@ -22,9 +22,9 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 
 //I might be using Pytorch instead of ONNX to deploy model since this app was built in Pytorch.
-//import ai.onnxruntime.OnnxTensor
-//import ai.onnxruntime.OrtEnvironment
-//import ai.onnxruntime.OrtSession
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
 import androidx.annotation.RequiresApi
 import java.nio.FloatBuffer
 
@@ -33,6 +33,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.launch
 import org.pytorch.BuildConfig
 import timber.log.Timber
+import androidx.core.content.edit
 
 class MainActivity : AppCompatActivity(), ServiceConnection {
     
@@ -167,7 +168,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         switchAutoStart.setOnCheckedChangeListener { _, isChecked ->
             // Save auto-start preference
             getSharedPreferences("deepfake_guard", Context.MODE_PRIVATE)
-                .edit().putBoolean("auto_start", isChecked).apply()
+                .edit { putBoolean("auto_start", isChecked) }
         }
         
         // Audio file analysis click listeners
@@ -186,12 +187,8 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
     
-    private fun hasOverlayPermission(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            Settings.canDrawOverlays(this)
-        } else {
-            true
-        }
+    private fun hasOverlayPermission() {
+        return
     }
     
     private fun requestPermissions() {

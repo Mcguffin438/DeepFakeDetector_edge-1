@@ -1,0 +1,11 @@
+- `[x]` Fix PyTorch TorchAudio resolution error
+    - `[x]` Remove `pytorch-android-torchaudio` from `libs.versions.toml`
+    - `[x]` Remove `pytorch-android-torchaudio` from `pytorch` bundle in `libs.versions.toml`
+- `[x]` Clean up `settings.gradle.kts` plugin versions to match `libs.versions.toml`
+- `[x]` Fix KotlinDL ONNX resolution error (wrong artifact name)
+- `[x]` Update `compileSdk` to 37 (required by newer AndroidX)
+- `[x]` Fix duplicate `libc++_shared.so` conflict between OpenCV and PyTorch
+- `[x]` Verify build and sync
+- `[x]` Optimize `gradle.properties` (Memory and Parallelism)
+- `[x]` Clean up `settings.gradle.kts` redundant configurations and update project name
+- `[x]` Revert `android.newDsl=true` due to plugin compatibility issues

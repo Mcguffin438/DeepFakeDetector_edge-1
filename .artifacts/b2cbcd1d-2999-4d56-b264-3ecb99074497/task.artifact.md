@@ -1,0 +1,4 @@
+- [x] Update `gradle/libs.versions.toml` with new versions and library definitions
+- [x] Refactor `app/build.gradle.kts` to use Version Catalog references
+- [/] Run Gradle build to verify dependency resolution
+- [ ] Verify test execution with updated dependencies

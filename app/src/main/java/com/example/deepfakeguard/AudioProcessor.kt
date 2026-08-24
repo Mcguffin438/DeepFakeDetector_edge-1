@@ -6,6 +6,11 @@ package com.example.deepfakeguard
 
 import timber.log.Timber
 import kotlin.math.*
+import ai.onnxruntime.OnnxTensor
+import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtSession
+import android.content.Context
+import java.nio.FloatBuffer
 
 /**
  * Result of multi-channel feature extraction
