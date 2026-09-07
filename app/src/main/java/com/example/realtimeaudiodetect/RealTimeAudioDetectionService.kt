@@ -166,6 +166,14 @@ class RealTimeAudioDetectionService : Service() {
             
             ortEnv = OrtEnvironment.getEnvironment()
             val sessionOptions = OrtSession.SessionOptions()
+            try {
+                // Prefer NNAPI on Android. On Qualcomm devices NNAPI may route to the Snapdragon GPU/NPU.
+                sessionOptions.addNnapi()
+                Timber.i("Using NNAPI execution provider (may route to Snapdragon accelerator)")
+            } catch (e: Exception) {
+                // If NNAPI provider is not present in the build, fall back to default CPU provider
+                Timber.w(e, "NNAPI not available - falling back to default execution provider")
+            }
             ortSession = ortEnv!!.createSession(modelFile.absolutePath, sessionOptions)
             isModelLoaded.set(true)
             
@@ -423,7 +431,8 @@ class RealTimeAudioDetectionService : Service() {
                 originalCommunicationDevice?.let { am.setCommunicationDevice(it) } ?: am.clearCommunicationDevice()
             }
         } else {
-            @Suppress("DEPRECATION") am.isSpeakerphoneOn = enabled
+            @Suppress("DEPRECATION")
+            am.isSpeakerphoneOn = enabled
         }
     }
     
