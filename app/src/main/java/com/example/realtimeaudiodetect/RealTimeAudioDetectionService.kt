@@ -24,7 +24,6 @@ import ai.onnxruntime.OrtSession
 import java.nio.FloatBuffer
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.math.*
 
 class RealTimeAudioDetectionService : Service() {
     
@@ -61,6 +60,8 @@ class RealTimeAudioDetectionService : Service() {
     private var originalSpeakerState: Boolean = false
     private var currentAudioSource: Int = MediaRecorder.AudioSource.DEFAULT
     private var originalCommunicationDevice: AudioDeviceInfo? = null
+    private var isSpeakerphoneRequested = false
+    private var audioFocusRequest: AudioFocusRequest? = null
     
     // ONNX ML inference
     private var ortEnv: OrtEnvironment? = null
@@ -248,6 +249,19 @@ class RealTimeAudioDetectionService : Service() {
             originalAudioMode = audioManager.mode
             originalSpeakerState = isSpeakerphoneActive()
             
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                            .build()
+                    )
+                    .build()
+                audioFocusRequest = focusRequest
+                audioManager.requestAudioFocus(focusRequest)
+            }
+            
             audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
             if (!originalSpeakerState) setSpeakerphoneOn(true)
             
@@ -270,6 +284,11 @@ class RealTimeAudioDetectionService : Service() {
         val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         audioManager.mode = originalAudioMode
         setSpeakerphoneOn(originalSpeakerState)
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
+            audioFocusRequest = null
+        }
     }
     
     private suspend fun processAudioStream() {
@@ -278,19 +297,26 @@ class RealTimeAudioDetectionService : Service() {
         val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
         
         val audioBuffer = ShortArray(bufferSize)
-        val audioChunk = mutableListOf<Short>()
+        val chunkQueue = ShortArray(chunkSamples)
+        var queueSize = 0
         var chunkId = 0
         
         while (isRecording.get() && currentCoroutineContext().isActive) {
             try {
                 val bytesRead = audioRecord?.read(audioBuffer, 0, bufferSize) ?: 0
                 if (bytesRead > 0) {
-                    for (i in 0 until bytesRead) audioChunk.add(audioBuffer[i])
-                    if (audioChunk.size >= chunkSamples) {
-                        val chunkToProcess = audioChunk.take(chunkSamples).toShortArray()
-                        processAudioChunk(chunkToProcess, chunkId++)
-                        val samplesToRemove = chunkSamples - overlapSamples
-                        repeat(samplesToRemove) { if (audioChunk.isNotEmpty()) audioChunk.removeAt(0) }
+                    for (i in 0 until bytesRead) {
+                        if (queueSize < chunkSamples) {
+                            chunkQueue[queueSize++] = audioBuffer[i]
+                        } else {
+                            val chunkToProcess = chunkQueue.copyOf()
+                            processAudioChunk(chunkToProcess, chunkId++)
+                            
+                            val keepCount = chunkSamples - overlapSamples
+                            System.arraycopy(chunkQueue, overlapSamples, chunkQueue, 0, keepCount)
+                            queueSize = keepCount
+                            chunkQueue[queueSize++] = audioBuffer[i]
+                        }
                     }
                 }
                 delay(10)
@@ -302,6 +328,8 @@ class RealTimeAudioDetectionService : Service() {
     }
     
     private suspend fun processAudioChunk(audioData: ShortArray, chunkId: Int) {
+        var onnxInput: OnnxTensor? = null
+        var results: OrtSession.Result? = null
         try {
             if (!isModelLoaded.get() || ortSession == null) return
             
@@ -310,9 +338,9 @@ class RealTimeAudioDetectionService : Service() {
             
             val inputName = ortSession?.inputNames?.iterator()?.next() ?: return
             val fb = FloatBuffer.wrap(featuresResult.features)
-            val onnxInput = OnnxTensor.createTensor(ortEnv, fb, longArrayOf(1, featuresResult.features.size.toLong()))
+            onnxInput = OnnxTensor.createTensor(ortEnv, fb, longArrayOf(1, featuresResult.features.size.toLong()))
             
-            val results = ortSession!!.run(mapOf(inputName to onnxInput))
+            results = ortSession!!.run(mapOf(inputName to onnxInput))
             
             val fakeProb = try {
                 if (results.size() > 1) {
@@ -325,9 +353,6 @@ class RealTimeAudioDetectionService : Service() {
                 }
             } catch (e: Exception) {
                 0.5f
-            } finally {
-                results.close()
-                onnxInput.close()
             }
 
             val isFake = fakeProb > 0.5f
@@ -342,6 +367,13 @@ class RealTimeAudioDetectionService : Service() {
             lastDetectionTime = System.currentTimeMillis()
         } catch (e: Exception) {
             Timber.e(e, "Error in processAudioChunk")
+        } finally {
+            try {
+                results?.close()
+                onnxInput?.close()
+            } catch (e: Exception) {
+                Timber.e(e)
+            }
         }
     }
     
@@ -352,6 +384,8 @@ class RealTimeAudioDetectionService : Service() {
     ): AudioAnalysisResult {
         val startTime = System.currentTimeMillis()
         return withContext(Dispatchers.IO) {
+            var onnxInput: OnnxTensor? = null
+            var results: OrtSession.Result? = null
             try {
                 if (!isModelLoaded.get() || ortSession == null) {
                     throw Exception("Model not loaded")
@@ -362,9 +396,9 @@ class RealTimeAudioDetectionService : Service() {
             
                 val inputName = ortSession?.inputNames?.iterator()?.next() ?: throw Exception("No input")
                 val fb = FloatBuffer.wrap(featuresResult.features)
-                val onnxInput = OnnxTensor.createTensor(ortEnv, fb, longArrayOf(1, featuresResult.features.size.toLong()))
+                onnxInput = OnnxTensor.createTensor(ortEnv, fb, longArrayOf(1, featuresResult.features.size.toLong()))
 
-                val results = ortSession!!.run(mapOf(inputName to onnxInput))
+                results = ortSession!!.run(mapOf(inputName to onnxInput))
                 val fakeProb = if (results.size() > 1) {
                     @Suppress("UNCHECKED_CAST")
                     val map = results[1].value as? List<Map<Long, Float>>
@@ -372,8 +406,6 @@ class RealTimeAudioDetectionService : Service() {
                 } else {
                     (results[0].value as? FloatArray)?.firstOrNull() ?: 0.5f
                 }
-                results.close()
-                onnxInput.close()
 
                 val isFake = fakeProb > 0.5f
                 val realProb = 1f - fakeProb
@@ -389,6 +421,13 @@ class RealTimeAudioDetectionService : Service() {
             } catch (e: Exception) {
                 Timber.e(e)
                 AudioAnalysisResult(false, 0f, 0f, 1f, 0, audioLengthMs, e.message)
+            } finally {
+                try {
+                    results?.close()
+                    onnxInput?.close()
+                } catch (e: Exception) {
+                    Timber.e(e)
+                }
             }
         }
     }
@@ -412,7 +451,7 @@ class RealTimeAudioDetectionService : Service() {
     fun getCallRecordingInfo(): String = "Monitoring active"
     
     private fun isSpeakerphoneActive(): Boolean {
-        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             am.communicationDevice?.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
         } else {
@@ -421,14 +460,24 @@ class RealTimeAudioDetectionService : Service() {
     }
     
     private fun setSpeakerphoneOn(enabled: Boolean) {
-        val am = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (enabled) {
-                originalCommunicationDevice = am.communicationDevice
+                if (!isSpeakerphoneRequested) {
+                    originalCommunicationDevice = am.communicationDevice
+                    isSpeakerphoneRequested = true
+                }
                 val speaker = am.availableCommunicationDevices.find { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
                 if (speaker != null) am.setCommunicationDevice(speaker)
             } else {
-                originalCommunicationDevice?.let { am.setCommunicationDevice(it) } ?: am.clearCommunicationDevice()
+                isSpeakerphoneRequested = false
+                val savedDevice = originalCommunicationDevice
+                if (savedDevice != null && am.availableCommunicationDevices.contains(savedDevice)) {
+                    am.setCommunicationDevice(savedDevice)
+                } else {
+                    am.clearCommunicationDevice()
+                }
+                originalCommunicationDevice = null
             }
         } else {
             @Suppress("DEPRECATION")
@@ -496,6 +545,12 @@ class RealTimeAudioDetectionService : Service() {
         super.onDestroy()
         stopAudioMonitoring()
         hideOverlay()
+        try {
+            ortSession?.close()
+            ortEnv?.close()
+        } catch (e: Exception) {
+            Timber.e(e, "Error closing ONNX runtime resources")
+        }
         serviceScope.cancel()
     }
 }
