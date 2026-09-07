@@ -1,21 +1,30 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- DeepfakeGuard Theme Colors -->
-    <color name="primary_color">#FF2E7D32</color>
-    <color name="primary_dark">#FF1B5E20</color>
-    <color name="accent_color">#FF1976D2</color>
+    <!-- RealTimeAudioDetect Theme Colors -->
+    <color name="primary_color">#2196F3</color>
+    <color name="primary_dark">#1976D2</color>
+    <color name="accent_color">#00BCD4</color>
+
+    <!-- Modern Palette -->
+    <color name="shield_active">#4CAF50</color>
+    <color name="shield_inactive">#F44336</color>
+    <color name="shield_loading">#FFC107</color>
+
+    <color name="grad_start">#F5F7FA</color>
+    <color name="grad_end">#B8C6DB</color>
     
     <!-- Status Colors -->
-    <color name="success_color">#FF4CAF50</color>
-    <color name="warning_color">#FFFF9800</color>
-    <color name="error_color">#FFF44336</color>
+    <color name="success_color">#2E7D32</color>
+    <color name="warning_color">#EF6C00</color>
+    <color name="error_color">#C62828</color>
     
     <!-- Background Colors -->
-    <color name="background_color">#FFF5F5F5</color>
-    <color name="card_background">#FFFFFFFF</color>
-    <color name="secondary_button">#FFE0E0E0</color>
+    <color name="background_color">#F8F9FA</color>
+    <color name="card_background">#FFFFFF</color>
+    <color name="secondary_button">#E9ECEF</color>
     
     <!-- Text Colors -->
-    <color name="primary_text">#FF212121</color>
-    <color name="secondary_text">#FF757575</color>
+    <color name="primary_text">#212529</color>
+    <color name="secondary_text">#6C757D</color>
+    <color name="white">#FFFFFF</color>
 </resources>

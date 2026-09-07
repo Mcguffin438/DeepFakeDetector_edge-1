@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace   = "com.example.deepfakeguard"
+    namespace   = "com.example.realtimeaudiodetect"
     compileSdk  = 37
 
     defaultConfig {
-        applicationId     = "com.example.deepfakeguard"
+        applicationId     = "com.example.realtimeaudiodetect"
         minSdk            = 24
         targetSdk         = 35  // Android 15
         versionCode       = 1
@@ -73,8 +73,7 @@ dependencies {
     implementation(libs.material)
     implementation(libs.androidx.constraintlayout)
     
-    // PyTorch Mobile keep just in case we deploy KNN or LGBM to this framework
-    implementation(libs.bundles.pytorch)
+    // OpenCV for signal processing if needed
     implementation(libs.opencv)
 
     // Async processing

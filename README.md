@@ -1,8 +1,8 @@
-# DeepfakeDetector - Real-time Deepfake Audio Detection
+# RealTimeAudioDetect - Real-time Deepfake Audio Detection
 
-A complete edge deployment pipeline for real-time deepfake detection during phone calls. This Android application uses multi-channel feature extraction and on-device PyTorch Mobile inference to detect synthetic audio without cloud connectivity. This project is the implementation of the solution described in **Deepfakes on the Edge: Building Smarter Detection Where It Counts.**
+A complete edge deployment pipeline for real-time deepfake detection during phone calls. This Android application uses multi-channel feature extraction and on-device PyTorch Mobile inference to detect synthetic audio without cloud connectivity. This project is the implementation of the solution described in **Real-time Audio Detection on the Edge: Building Smarter Detection Where It Counts.**
 
-![DeepfakeDetector Workflow](images/deepfake_edge_workflow.webp)
+![RealTimeAudioDetect Workflow](images/deepfake_edge_workflow.webp)
 
 ## Table of Contents
 - [Overview](#overview)
@@ -114,7 +114,7 @@ val fakeProb = sigmoid(outputTensor.dataAsFloatArray[0])
 
 ### Audio Processing
 - **AudioProcessor**: Multi-channel feature extraction (MelSpec, MFCC, LFCC)
-- **DeepfakeDetectionService**: Edge deployment service with foreground monitoring
+- **RealTimeAudioDetectionService**: Edge deployment service with foreground monitoring
 - **PhoneStateReceiver**: Automatic call detection and service activation
 
 ### User Interface
@@ -130,9 +130,9 @@ val fakeProb = sigmoid(outputTensor.dataAsFloatArray[0])
 ```
 DeepFakeDetector_edge/
 ├── app/src/main/
-│   ├── java/com/example/deepfakeguard/
+│   ├── java/com/example/realtimeaudiodetect/
 │   │   ├── AudioProcessor.kt           # Multi-channel feature extraction
-│   │   ├── DeepfakeDetectionService.kt # Edge deployment service
+│   │   ├── RealTimeAudioDetectionService.kt # Edge deployment service
 │   │   ├── OverlayView.kt             # Real-time visual alerts
 │   │   └── PhoneStateReceiver.kt      # Call detection
 │   ├── assets/models/                 # PyTorch Mobile models
@@ -151,7 +151,7 @@ DeepFakeDetector_edge/
 
 ### Adding New Features
 1. Implement feature extraction in `AudioProcessor.kt`
-2. Update tensor shapes in `DeepfakeDetectionService.kt`
+2. Update tensor shapes in `RealTimeAudioDetectionService.kt`
 3. Modify overlay alerts in `OverlayView.kt`
 
 ### Key Dependencies
@@ -169,5 +169,5 @@ All courses.
 
 * [Part 1: Audio deepfake fraud detection system](https://thehyperplane.substack.com/p/audio-deepfake-fraud-detection-system?r=5l0jbv)  
 * [Part 2: Training a model to detect deepfake audio](https://thehyperplane.substack.com/p/training-a-model-to-detect-deepfake?r=5l0jbv)
-* [Deepfakes on the Edge: Building Smarter Detection Where It Counts](https://thehyperplane.substack.com/p/training-a-model-to-detect-deepfake?r=5l0jbv)
+* [RealTimeAudioDetect on the Edge: Building Smarter Detection Where It Counts](https://thehyperplane.substack.com/p/training-a-model-to-detect-deepfake?r=5l0jbv)
 * [Beyond the Cloud: Why the Future of AI Is on the Edge](https://thehyperplane.substack.com/p/beyond-the-cloud-why-the-future-of?r=5l0jbv)

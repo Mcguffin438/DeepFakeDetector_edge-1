@@ -1,23 +1,22 @@
 [versions]
-agp = "9.3.0"
-kotlin = "2.3.20"
+agp = "9.3.2"
+kotlin = "2.4.10"
 coreKtx = "1.19.0"
 junit = "4.13.2"
 junitVersion = "1.3.0"
 espressoCore = "3.7.0"
 lifecycleRuntimeKtx = "2.11.0"
 activityCompose = "1.13.0"
-composeBom = "2026.03.01"
-appcompat = "1.7.1"
-fragment = "1.8.9"
+composeBom = "2026.08.00"
+appcompat = "1.8.0"
+fragment = "1.9.0"
 material = "1.14.0"
-constraintlayout = "2.2.1"
+constraintlayout = "2.2.2"
 coroutines = "1.11.0"
 activity = "1.13.0"
 timber = "5.0.1"
 mockito = "5.23.0"
-pytorch = "2.1.0"
-onnxruntime = "1.27.0"
+onnxruntime = "1.29.0"
 kotlindl = "0.5.2"
 opencv = "4.5.3"
 
@@ -35,9 +34,7 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 
-# PyTorch & ML
-pytorch-android = { group = "org.pytorch", name = "pytorch_android", version.ref = "pytorch" }
-pytorch-android-torchvision = { group = "org.pytorch", name = "pytorch_android_torchvision", version.ref = "pytorch" }
+# ML & Signal Processing
 opencv = { group = "com.quickbirdstudios", name = "opencv", version.ref = "opencv" }
 onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
 kotlindl-onnx = { group = "org.jetbrains.kotlinx", name = "kotlin-deeplearning-onnx", version.ref = "kotlindl" }
@@ -60,7 +57,6 @@ androidx-material3 = { group = "androidx.compose.material3", name = "material3" 
 
 [bundles]
 coroutines = ["kotlinx-coroutines-android", "kotlinx-coroutines-core"]
-pytorch = ["pytorch-android", "pytorch-android-torchvision"]
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

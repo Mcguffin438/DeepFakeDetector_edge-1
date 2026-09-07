@@ -1,0 +1,6 @@
+- `[x]` Clean up `DeepfakeDetectionService.kt` (Remove PyTorch, standardize ONNX)
+- `[x]` Clean up `MainActivity.kt` (Remove PyTorch references)
+- `[x]` Update `AudioProcessor.kt` for Scikit-Learn compatibility
+- `[x]` Update `build.gradle.kts` (Remove PyTorch dependencies)
+- `[x]` Update `libs.versions.toml` (Cleanup)
+- `[x]` Verify build and runtime loading
