@@ -94,7 +94,7 @@ Required permissions:
 2. **Visual Alerts**: Real-time overlay shows detection status:
    - 🔍 **Yellow**: Analyzing audio chunks
    - ✅ **Green**: Authentic speech detected
-   - ⚠️ **Red**: High-confidence deepfake (>70%)
+   - ⚠️ **Red**: High-confidence deepfake (>90%)
 3. **Privacy**: All processing occurs locally, no data transmission
 
 ### Example Detection Flow
