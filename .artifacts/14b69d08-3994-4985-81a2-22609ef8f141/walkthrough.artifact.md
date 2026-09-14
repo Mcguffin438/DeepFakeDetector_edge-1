@@ -1,16 +1,16 @@
-# Walkthrough - Application Build, Deployment, and Execution
+# Walkthrough - MainActivity Refactoring & Bug Fixes
 
-Successfully built, deployed, and executed the RealTimeAudioDetect application on the connected Android emulator (`emulator-5554`).
+Successfully refactored `MainActivity.kt` to enhance memory safety, reliability, and error handling.
 
-## Execution & Deployment
+## Changes
 
-### Build Verification
-- Executed `gradle_build("app:assembleDebug")` successfully with zero errors.
+### Activity Refactoring & Error Handling
+#### [MODIFY] [MainActivity.kt](file:///C:/Users/dusty/Desktop/DeepFakeDetector_edge/app/src/main/java/com/example/realtimeaudiodetect/MainActivity.kt)
+- **Memory Safety**: Wrapped audio file decoding in `Dispatchers.IO` using `BufferedInputStream` to prevent UI thread blocking and potential memory spikes.
+- **Service Status Checking**: Replaced the deprecated and restricted `activityManager.getRunningServices()` API with reliable service binding state tracking (`isServiceBound && deepfakeService != null`).
+- **Error Handling**: Populated empty catch blocks with descriptive `Timber.e` logging and user-facing `Toast` feedback to prevent swallowed exceptions during file analysis.
 
-### Deployment & Execution
-- Deployed the application package (`com.example.realtimeaudiodetect`) to `emulator-5554`.
-- Verified via screenshot and window focus check that `MainActivity` started successfully and is running in the foreground.
+## Verification Results
 
-## UI Verification
-![App Running Screenshot](file:///C:/Users/dusty/Desktop/DeepFakeDetector_edge/.artifacts/14b69d08-3994-4985-81a2-22609ef8f141/scratch/app_running.png)
-*(Note: Screenshot captured showing `MainActivity` in focus)*
+### Automated Build Verification
+- Ran `gradle_build("app:assembleDebug")` successfully with clean compilation and zero warnings.

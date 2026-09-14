@@ -1,30 +1,29 @@
-# Implementation Plan - Create Unit Test Suite
+# Implementation Plan - Refactor MainActivity.kt
 
-Create a comprehensive unit test suite (`AudioProcessorTest.kt`) for the core audio processing logic (`AudioProcessor.kt`) and a Python test script (`test_knn_detector.py`) for the Python ML pipeline to ensure all code works reliably.
+Refactor `MainActivity.kt` to address potential memory and reliability issues:
+1. **Memory Safety in Audio File Reading**: Replace full-file `inputStream.readBytes()` with a safe buffered/chunked PCM sample reader to prevent `OutOfMemoryError` on large audio files.
+2. **Reliable Service State Detection**: Avoid using the deprecated and restricted `activityManager.getRunningServices()` API by tracking service status through binding state or explicit flags.
+3. **Robust Error Handling**: Add proper error logging (`Timber.e`) and UI state reset in `try-catch` blocks during audio file analysis.
 
 ## User Review Required
 
 > [!IMPORTANT]
-> This will add:
-> 1. An Android local unit test (`AudioProcessorTest.kt`) under `app/src/test/java/com/example/realtimeaudiodetect/` to test feature extraction and multi-channel shape generation.
-> 2. A Python test script (`notebooks/test_knn_detector.py`) to verify embedding extraction, KNN model fitting, and inference.
+> This refactor hardens `MainActivity.kt` against Out-Of-Memory exceptions when picking large audio files and replaces deprecated API calls for service status checks.
 
 ## Open Questions
 
-- None. The tests use JUnit4 for Android and standard Python assertions for the ML pipeline.
+- None.
 
 ## Proposed Changes
 
-### [Test Suite Implementation]
+### [MainActivity Refactoring]
 
-#### [NEW] [AudioProcessorTest.kt](file:///C:/Users/dusty/Desktop/DeepFakeDetector_edge/app/src/test/java/com/example/realtimeaudiodetect/AudioProcessorTest.kt)
-- Test `AudioProcessor` feature extraction, sample rate handling, and feature pooling.
-
-#### [NEW] [test_knn_detector.py](file:///C:/Users/dusty/Desktop/DeepFakeDetector_edge/notebooks/test_knn_detector.py)
-- Test PyTorch feature extractor and KNN deepfake classifier.
+#### [MODIFY] [MainActivity.kt](file:///C:/Users/dusty/Desktop/DeepFakeDetector_edge/app/src/main/java/com/example/realtimeaudiodetect/MainActivity.kt)
+- Refactor `readAudioFile` to read PCM samples bufferedly/safely.
+- Refactor `isServiceRunning` to rely on robust service binding and state tracking rather than deprecated `getRunningServices()`.
+- Populate empty catch blocks with proper `Timber.e` logging and UI recovery.
 
 ## Verification Plan
 
 ### Automated Tests
-- Run Gradle unit tests (`gradle_build("app:testDebugUnitTest")`) to verify Android unit tests.
-- Run Python test script (`python notebooks/test_knn_detector.py`).
+- Run Gradle build (`gradle_build("app:assembleDebug")`) to verify clean compilation.

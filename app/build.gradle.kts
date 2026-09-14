@@ -1,5 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
 }
 
 android {
@@ -31,7 +32,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
-    // Removed deprecated kotlinOptions. JVM target is set in the kotlin block below.
 
     buildFeatures {
         buildConfig = true
@@ -40,8 +40,6 @@ android {
     androidResources {
         noCompress += setOf("pt", "ptl", "so", "onnx")  // Keep PyTorch and ONNX files uncompressed
     }
-
-
 
     // PyTorch packaging config
     packaging {
@@ -52,6 +50,12 @@ android {
             "/META-INF/INDEX.LIST",
             "/META-INF/DEPENDENCIES"
         )
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
     }
 }
 

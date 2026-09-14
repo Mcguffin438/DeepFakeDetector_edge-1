@@ -7,9 +7,7 @@ package com.example.realtimeaudiodetect
 import android.Manifest
 import android.animation.AnimatorSet
 import android.animation.ObjectAnimator
-import android.animation.ValueAnimator
 import android.content.ComponentName
-import android.content.Context
 import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
@@ -30,13 +28,18 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.switchmaterial.SwitchMaterial
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import timber.log.Timber
 import androidx.core.content.edit
+import androidx.core.net.toUri
+import java.io.BufferedInputStream
 
 class MainActivity : AppCompatActivity(), ServiceConnection {
     
     companion object {
+        @RequiresApi(Build.VERSION_CODES.P)
         private val REQUIRED_PERMISSIONS = arrayOf(
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.READ_PHONE_STATE,
@@ -78,6 +81,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     // Animation state
     private var pulseAnimator: AnimatorSet? = null
     
+    @RequiresApi(Build.VERSION_CODES.P)
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
@@ -85,6 +89,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         if (hasAllPermissions()) checkOverlayPermission()
     }
     
+    @RequiresApi(Build.VERSION_CODES.P)
     private val overlayPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { 
@@ -185,6 +190,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
     
+    @RequiresApi(Build.VERSION_CODES.P)
     private fun hasAllPermissions(): Boolean {
         return REQUIRED_PERMISSIONS.all { permission ->
             ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
@@ -199,6 +205,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
     
+    @RequiresApi(Build.VERSION_CODES.P)
     private fun requestPermissions() {
         val missingPermissions = REQUIRED_PERMISSIONS.filter { permission ->
             ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED
@@ -221,6 +228,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
     
+    @RequiresApi(Build.VERSION_CODES.P)
     private fun checkOverlayPermission() {
         if (!hasOverlayPermission()) {
             AlertDialog.Builder(this)
@@ -228,7 +236,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
                 .setMessage("RealTimeAudioDetect needs permission to display detection results over other apps during calls.")
                 .setPositiveButton("Grant") { _, _ ->
                     val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
-                        data = Uri.parse("package:$packageName")
+                        data = "package:$packageName".toUri()
                     }
                     overlayPermissionLauncher.launch(intent)
                 }
@@ -237,6 +245,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
     
+    @RequiresApi(Build.VERSION_CODES.P)
     private fun updatePermissionStatus() {
         val hasPermissions = hasAllPermissions()
         val hasOverlay = hasOverlayPermission()
@@ -309,13 +318,8 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     }
     
     private fun isServiceRunning(): Boolean {
-        val activityManager = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
-        @Suppress("DEPRECATION")
-        val services = activityManager.getRunningServices(Integer.MAX_VALUE)
-        
-        return services.any { serviceInfo ->
-            serviceInfo.service.className == RealTimeAudioDetectionService::class.java.name
-        }
+        // Reliable state tracking via service binding and reference instead of deprecated getRunningServices()
+        return isServiceBound && deepfakeService != null
     }
     
     @RequiresApi(Build.VERSION_CODES.O)
@@ -475,6 +479,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
                 cursor.getString(nameIndex)
             } ?: "Unknown file"
         } catch (e: Exception) {
+            Timber.e(e, "Error getting file name")
             "Audio file"
         }
     }
@@ -497,10 +502,13 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
                             }
                         }
                     } else {
+                        Toast.makeText(this@MainActivity, "Failed to read audio file", Toast.LENGTH_SHORT).show()
                         btnAnalyzeFile.isEnabled = true
                         progressBar.visibility = View.GONE
                     }
                 } catch (e: Exception) {
+                    Timber.e(e, "Error analyzing selected audio file")
+                    Toast.makeText(this@MainActivity, "Analysis error: ${e.message}", Toast.LENGTH_LONG).show()
                     btnAnalyzeFile.isEnabled = true
                     progressBar.visibility = View.GONE
                 }
@@ -509,23 +517,27 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     }
     
     private suspend fun readAudioFile(uri: Uri): ShortArray? {
-        return try {
-            contentResolver.openInputStream(uri)?.use { inputStream ->
-                val bytes = inputStream.readBytes()
-                val dataStartIndex = if (bytes.size > 44 && 
-                    bytes.sliceArray(0..3).contentEquals("RIFF".toByteArray())) 44 else 0
-                
-                val audioBytes = bytes.sliceArray(dataStartIndex until bytes.size)
-                val samples = ShortArray(audioBytes.size / 2)
-                for (i in samples.indices) {
-                    val low = audioBytes[i * 2].toInt() and 0xFF
-                    val high = audioBytes[i * 2 + 1].toInt() and 0xFF
-                    samples[i] = ((high shl 8) or low).toShort()
+        return withContext(Dispatchers.IO) {
+            try {
+                contentResolver.openInputStream(uri)?.use { inputStream ->
+                    val bufferedStream = BufferedInputStream(inputStream)
+                    val bytes = bufferedStream.readBytes()
+                    val dataStartIndex = if (bytes.size > 44 && 
+                        bytes.sliceArray(0..3).contentEquals("RIFF".toByteArray())) 44 else 0
+                    
+                    val audioBytes = bytes.sliceArray(dataStartIndex until bytes.size)
+                    val samples = ShortArray(audioBytes.size / 2)
+                    for (i in samples.indices) {
+                        val low = audioBytes[i * 2].toInt() and 0xFF
+                        val high = audioBytes[i * 2 + 1].toInt() and 0xFF
+                        samples[i] = ((high shl 8) or low).toShort()
+                    }
+                    samples
                 }
-                samples
+            } catch (e: Exception) {
+                Timber.e(e, "Error reading audio file")
+                null
             }
-        } catch (e: Exception) {
-            null
         }
     }
     
