@@ -1,0 +1,8 @@
+# PyTorch and Audio Processing Dependencies for DeepFakeDetector Python Pipeline / Notebooks
+torch>=2.0.0
+torchaudio>=2.0.0
+numpy>=1.20.0
+scikit-learn>=1.0.0
+onnx>=1.12.0
+matplotlib>=3.3.0
+soundfile>=0.10.0
