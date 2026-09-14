@@ -1,7 +1,7 @@
 # Tasks
 
-- [x] Create implementation plan for PyTorch `.pt` export (`implementation_plan.artifact.md`)
-- [ ] Implement `AudioDeepfakeDetectorEndToEnd` unified module in `notebooks/knn_audio_df_detector.py`
-- [ ] Implement `export_to_torchscript()` function to generate `knn_audio_detector.pt`
-- [ ] Verify script execution and `.pt` generation
+- [x] Create implementation plan for PyTorch Vulkan dependencies (`implementation_plan.artifact.md`)
+- [ ] Update `gradle/libs.versions.toml` with PyTorch version and Vulkan library entries
+- [ ] Update `app/build.gradle.kts` with PyTorch Vulkan and TorchVision dependencies
+- [ ] Run Gradle build (`gradle_build("app:assembleDebug")`) to verify build
 - [ ] Create walkthrough artifact (`walkthrough.artifact.md`)

@@ -1,26 +1,28 @@
-# Implementation Plan - Convert KNN Audio Detector to PyTorch TorchScript (.pt)
+# Implementation Plan - Add PyTorch Vulkan Dependencies to Android Application
 
-Convert the PyTorch KNN Audio Deepfake detector from `notebooks/knn_audio_df_detector.py` into a compiled PyTorch TorchScript `.pt` model file (`knn_audio_detector.pt`) suitable for loading and running in Android via PyTorch Mobile.
+Add PyTorch Mobile Vulkan GPU backend dependency (`org.pytorch:pytorch_android_vulkan:2.1.0`) and TorchVision (`org.pytorch:pytorch_android_torchvision:2.1.0`) to `gradle/libs.versions.toml` and `app/build.gradle.kts` to enable hardware-accelerated Vulkan inference for PyTorch `.pt` models in the Android app.
 
 ## User Review Required
 
 > [!IMPORTANT]
-> This creates an end-to-end wrapper module (`AudioDeepfakeDetectorEndToEnd`) combining feature extraction and the fitted k-NN classifier, compiles it via `torch.jit.script` or `torch.jit.trace`, and saves it as `app/src/main/assets/models/knn_audio_detector.pt`.
+> This will integrate PyTorch Mobile Vulkan GPU acceleration (`org.pytorch:pytorch_android_vulkan:2.1.0`) into the Android app dependencies, allowing models like `deepfake_detector.pt` to run on GPU via Vulkan.
 
 ## Open Questions
 
-- None. TorchScript will enable direct execution of the model inside Android Java/Kotlin using PyTorch Mobile (`LiteModuleLoader`).
+- None. PyTorch Android Vulkan is the standard backend for mobile GPU inference.
 
 ## Proposed Changes
 
-### [KNN Audio Detector PyTorch Export]
+### [Android App Dependencies]
 
-#### [MODIFY] [knn_audio_df_detector.py](file:///C:/Users/dusty/Desktop/DeepFakeDetector_edge/notebooks/knn_audio_df_detector.py)
-- Add a unified `AudioDeepfakeDetectorEndToEnd` module that bundles `AudioFeatureExtractor` and `PyTorchKNNAudioDeepfakeClassifier`.
-- Add `export_to_torchscript()` function to trace/script the fitted model and save it to `app/src/main/assets/models/knn_audio_detector.pt`.
-- Update `__main__` block to execute training fitting, inference testing, and `.pt` export.
+#### [MODIFY] [libs.versions.toml](file:///C:/Users/dusty/Desktop/DeepFakeDetector_edge/gradle/libs.versions.toml)
+- Add `pytorch = "2.1.0"` version entry.
+- Add `pytorch-android-vulkan` and `pytorch-android-torchvision` library definitions.
+
+#### [MODIFY] [build.gradle.kts](file:///C:/Users/dusty/Desktop/DeepFakeDetector_edge/app/build.gradle.kts)
+- Add `pytorch-android-vulkan` and `pytorch-android-torchvision` dependencies.
 
 ## Verification Plan
 
 ### Automated Tests
-- Run `python notebooks/knn_audio_df_detector.py` to verify model building, fitting, TorchScript compilation, and `.pt` file generation.
+- Run Gradle build (`gradle_build("app:assembleDebug")`) to verify dependency resolution and compilation success.
