@@ -1,19 +1,16 @@
-# Walkthrough - PyTorch Vulkan GPU Acceleration & Model Execution
+# Walkthrough - Application Build, Deployment, and Execution
 
-Successfully integrated PyTorch Mobile Vulkan GPU backend dependencies into the Android application and verified build compilation.
+Successfully built, deployed, and executed the RealTimeAudioDetect application on the connected Android emulator (`emulator-5554`).
 
-## Changes
+## Execution & Deployment
 
-### Android App Dependencies & GPU Acceleration
-#### [MODIFY] [libs.versions.toml](file:///C:/Users/dusty/Desktop/DeepFakeDetector_edge/gradle/libs.versions.toml)
-- Added `pytorch = "2.1.0"` version definition.
-- Added `pytorch-android-vulkan` and `pytorch-android-torchvision` library definitions.
+### Build Verification
+- Executed `gradle_build("app:assembleDebug")` successfully with zero errors.
 
-#### [MODIFY] [build.gradle.kts](file:///C:/Users/dusty/Desktop/DeepFakeDetector_edge/app/build.gradle.kts)
-- Added `pytorch-android-vulkan` and `pytorch-android-torchvision` implementation dependencies.
-- Added JNI packaging pickFirst configurations to prevent library duplication conflicts.
+### Deployment & Execution
+- Deployed the application package (`com.example.realtimeaudiodetect`) to `emulator-5554`.
+- Verified via screenshot and window focus check that `MainActivity` started successfully and is running in the foreground.
 
-## Verification Results
-
-### Automated Build Verification
-- Ran `gradle_build("app:assembleDebug")` successfully, confirming complete dependency resolution and build success.
+## UI Verification
+![App Running Screenshot](file:///C:/Users/dusty/Desktop/DeepFakeDetector_edge/.artifacts/14b69d08-3994-4985-81a2-22609ef8f141/scratch/app_running.png)
+*(Note: Screenshot captured showing `MainActivity` in focus)*
