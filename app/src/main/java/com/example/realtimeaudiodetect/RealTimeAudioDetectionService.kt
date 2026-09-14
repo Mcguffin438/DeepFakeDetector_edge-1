@@ -21,6 +21,7 @@ import java.io.File
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
+import ai.onnxruntime.TensorInfo
 import java.nio.FloatBuffer
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
@@ -68,6 +69,7 @@ class RealTimeAudioDetectionService : Service() {
     private var ortSession: OrtSession? = null
     private var isModelLoaded = AtomicBoolean(false)
     private val audioProcessor = AudioProcessor()
+    private var pendingStartIntent: Intent? = null
     
     // Call state
     private var currentPhoneNumber: String? = null
@@ -135,14 +137,20 @@ class RealTimeAudioDetectionService : Service() {
     
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     private fun handleStartDetection(intent: Intent) {
-        if (!isModelLoaded.get()) {
+        currentPhoneNumber = intent.getStringExtra(EXTRA_PHONE_NUMBER)
+        isIncomingCall = intent.getBooleanExtra(EXTRA_IS_INCOMING, false)
+
+        if (!isModelLoaded.get() || ortSession == null) {
+            pendingStartIntent = intent
             handlePrepare(intent)
             return
         }
-        
-        currentPhoneNumber = intent.getStringExtra(EXTRA_PHONE_NUMBER)
-        isIncomingCall = intent.getBooleanExtra(EXTRA_IS_INCOMING, false)
-        
+
+        startDetectionSession()
+    }
+
+    private fun startDetectionSession() {
+        pendingStartIntent = null
         startForeground(NOTIFICATION_ID, createNotification("Monitoring call for deepfakes..."))
         showOverlay()
         startAudioMonitoring()
@@ -164,7 +172,7 @@ class RealTimeAudioDetectionService : Service() {
                 isModelLoaded.set(false)
                 return
             }
-            
+
             ortEnv = OrtEnvironment.getEnvironment()
             val sessionOptions = OrtSession.SessionOptions()
             try {
@@ -177,15 +185,23 @@ class RealTimeAudioDetectionService : Service() {
             }
             ortSession = ortEnv!!.createSession(modelFile.absolutePath, sessionOptions)
             isModelLoaded.set(true)
-            
+
+            val queuedIntent = pendingStartIntent
+            if (queuedIntent != null) {
+                pendingStartIntent = null
+                serviceScope.launch(Dispatchers.Main) {
+                    startDetectionSession()
+                }
+            }
+
             Timber.i("✅ ONNX model loaded successfully: ${modelFile.name}")
-            
+
             serviceScope.launch(Dispatchers.Main) {
                 val notification = createNotification("Model loaded - Ready to analyze audio")
                 val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
                 notificationManager.notify(NOTIFICATION_ID, notification)
             }
-            
+
         } catch (e: Exception) {
             Timber.e(e, "❌ Failed to load ONNX model")
             isModelLoaded.set(false)
@@ -327,21 +343,52 @@ class RealTimeAudioDetectionService : Service() {
         }
     }
     
+    private fun resolveSessionInputShape(): LongArray? {
+        val inputInfo = ortSession?.inputInfo ?: return null
+        val firstInput = inputInfo.values.firstOrNull() ?: return null
+        val tensorInfo = firstInput.info as? TensorInfo ?: return null
+        val shape = tensorInfo.shape
+        if (shape.isEmpty()) return null
+        return shape.filter { it > 0L }.toLongArray()
+    }
+
+    private fun buildOnnxInputTensor(featuresResult: MultiChannelFeaturesResult): OnnxTensor? {
+        val sessionShape = resolveSessionInputShape() ?: return OnnxTensor.createTensor(
+            ortEnv,
+            FloatBuffer.wrap(featuresResult.features),
+            longArrayOf(1, featuresResult.features.size.toLong())
+        )
+
+        val expectedSize = if (sessionShape.size > 1) {
+            sessionShape.drop(1).fold(1L) { acc, dim -> acc * dim }
+        } else {
+            sessionShape[0]
+        }
+
+        val normalizedFeatures = audioProcessor.prepareModelInputVector(featuresResult, expectedSize.toInt())
+        val shape = if (sessionShape.size > 1) {
+            longArrayOf(sessionShape[0], expectedSize)
+        } else {
+            longArrayOf(expectedSize)
+        }
+        return OnnxTensor.createTensor(ortEnv, FloatBuffer.wrap(normalizedFeatures), shape)
+    }
+
     private suspend fun processAudioChunk(audioData: ShortArray, chunkId: Int) {
         var onnxInput: OnnxTensor? = null
         var results: OrtSession.Result? = null
         try {
             if (!isModelLoaded.get() || ortSession == null) return
-            
+
             val featuresResult = audioProcessor.generateMultiChannelFeatures(audioData, SAMPLE_RATE)
             if (featuresResult.error != null) return
-            
+
             val inputName = ortSession?.inputNames?.iterator()?.next() ?: return
-            val fb = FloatBuffer.wrap(featuresResult.features)
-            onnxInput = OnnxTensor.createTensor(ortEnv, fb, longArrayOf(1, featuresResult.features.size.toLong()))
-            
+            onnxInput = buildOnnxInputTensor(featuresResult)
+            if (onnxInput == null) return
+
             results = ortSession!!.run(mapOf(inputName to onnxInput))
-            
+
             val fakeProb = try {
                 if (results.size() > 1) {
                     @Suppress("UNCHECKED_CAST")
@@ -357,10 +404,10 @@ class RealTimeAudioDetectionService : Service() {
 
             val isFake = fakeProb > 0.5f
             val result = DetectionResult(System.currentTimeMillis(), isFake, fakeProb, chunkId)
-            
+
             detectionResults.add(result)
             withContext(Dispatchers.Main) { updateOverlay(result) }
-            
+
             if (isFake && fakeProb > 0.7f) {
                 Timber.w("HIGH CONFIDENCE DEEPFAKE DETECTED: ${fakeProb * 100}%")
             }
@@ -376,9 +423,9 @@ class RealTimeAudioDetectionService : Service() {
             }
         }
     }
-    
+
     suspend fun analyzeRawAudio(
-        audioData: ShortArray, 
+        audioData: ShortArray,
         sampleRate: Int = SAMPLE_RATE,
         audioLengthMs: Long = -1L
     ): AudioAnalysisResult {
@@ -390,13 +437,13 @@ class RealTimeAudioDetectionService : Service() {
                 if (!isModelLoaded.get() || ortSession == null) {
                     throw Exception("Model not loaded")
                 }
-            
+
                 val featuresResult = audioProcessor.generateMultiChannelFeatures(audioData, sampleRate)
                 if (featuresResult.error != null) throw Exception(featuresResult.error)
-            
+
                 val inputName = ortSession?.inputNames?.iterator()?.next() ?: throw Exception("No input")
-                val fb = FloatBuffer.wrap(featuresResult.features)
-                onnxInput = OnnxTensor.createTensor(ortEnv, fb, longArrayOf(1, featuresResult.features.size.toLong()))
+                onnxInput = buildOnnxInputTensor(featuresResult)
+                if (onnxInput == null) throw Exception("Failed to build model input")
 
                 results = ortSession!!.run(mapOf(inputName to onnxInput))
                 val fakeProb = if (results.size() > 1) {
@@ -409,7 +456,7 @@ class RealTimeAudioDetectionService : Service() {
 
                 val isFake = fakeProb > 0.5f
                 val realProb = 1f - fakeProb
-                
+
                 AudioAnalysisResult(
                     isFake = isFake,
                     confidence = if (isFake) fakeProb else realProb,

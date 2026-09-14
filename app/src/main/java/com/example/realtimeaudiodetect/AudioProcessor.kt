@@ -237,6 +237,43 @@ class AudioProcessor {
         }
         return pooled
     }
+
+    fun prepareModelInputVector(result: MultiChannelFeaturesResult, expectedInputSize: Int): FloatArray {
+        if (expectedInputSize <= 0 || result.features.isEmpty()) return FloatArray(0)
+
+        val pooled = poolFeatures(result)
+        if (pooled.isNotEmpty() && pooled.size == expectedInputSize) {
+            return pooled
+        }
+
+        val source = if (pooled.size == result.features.size) result.features else if (pooled.isNotEmpty()) pooled else result.features
+        if (source.isEmpty()) return FloatArray(0)
+        if (source.size == expectedInputSize) return source.copyOf()
+
+        val normalized = FloatArray(expectedInputSize)
+        if (source.size < expectedInputSize) {
+            val scale = source.size.toFloat() / expectedInputSize.toFloat()
+            for (i in 0 until expectedInputSize) {
+                val sourceIndex = minOf((i * scale).toInt(), source.size - 1)
+                normalized[i] = source[sourceIndex]
+            }
+            return normalized
+        }
+
+        val step = source.size.toFloat() / expectedInputSize.toFloat()
+        for (i in 0 until expectedInputSize) {
+            val startIndex = (i * step).toInt()
+            val endIndex = minOf(((i + 1) * step).toInt(), source.size)
+            var sum = 0f
+            var count = 0
+            for (j in startIndex until endIndex) {
+                sum += source[j]
+                count++
+            }
+            normalized[i] = if (count == 0) source.lastOrNull() ?: 0f else sum / count
+        }
+        return normalized
+    }
     
     private fun separateStereoChannels(interleavedData: ShortArray): Pair<FloatArray, FloatArray> {
         val numSamples = interleavedData.size / 2
