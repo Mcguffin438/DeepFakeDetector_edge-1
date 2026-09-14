@@ -55,15 +55,9 @@ android {
     }
 }
 
-fun compilerOptions(function: () -> Unit) {}
-
 kotlin {
     compilerOptions {
-        val jvmTarget = null
-        jvmTarget.set(
-            JvmTarget.JVM_11,
-            value = TODO()
-        )
+        jvmTarget.set(JvmTarget.JVM_11)
     }
 }
 

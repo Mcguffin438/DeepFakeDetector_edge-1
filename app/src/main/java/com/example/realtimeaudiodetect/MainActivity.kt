@@ -39,15 +39,18 @@ import java.io.BufferedInputStream
 class MainActivity : AppCompatActivity(), ServiceConnection {
     
     companion object {
-        @RequiresApi(Build.VERSION_CODES.P)
-        private val REQUIRED_PERMISSIONS = arrayOf(
-            Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.READ_PHONE_STATE,
-            Manifest.permission.READ_CALL_LOG,
-            Manifest.permission.MODIFY_AUDIO_SETTINGS,
-            Manifest.permission.FOREGROUND_SERVICE,
-            Manifest.permission.FOREGROUND_SERVICE_PHONE_CALL
-        )
+        private val REQUIRED_PERMISSIONS: Array<String>
+            get() {
+                val list = mutableListOf(
+                    Manifest.permission.RECORD_AUDIO,
+                    Manifest.permission.READ_PHONE_STATE,
+                    Manifest.permission.READ_CALL_LOG
+                )
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    list.add(Manifest.permission.POST_NOTIFICATIONS)
+                }
+                return list.toTypedArray()
+            }
     }
     
     // Core UI components
@@ -81,7 +84,6 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     // Animation state
     private var pulseAnimator: AnimatorSet? = null
     
-    @RequiresApi(Build.VERSION_CODES.P)
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { _ ->
@@ -89,7 +91,6 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         if (hasAllPermissions()) checkOverlayPermission()
     }
     
-    @RequiresApi(Build.VERSION_CODES.P)
     private val overlayPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { 
@@ -190,7 +191,6 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
     
-    @RequiresApi(Build.VERSION_CODES.P)
     private fun hasAllPermissions(): Boolean {
         return REQUIRED_PERMISSIONS.all { permission ->
             ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
@@ -205,7 +205,6 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
     
-    @RequiresApi(Build.VERSION_CODES.P)
     private fun requestPermissions() {
         val missingPermissions = REQUIRED_PERMISSIONS.filter { permission ->
             ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED
@@ -217,7 +216,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
                 .setMessage("RealTimeAudioDetect needs these permissions to monitor phone calls and detect deepfakes in real-time:\n\n" +
                         "• Phone permissions: To detect when calls start/end\n" +
                         "• Audio recording: To analyze call audio\n" +
-                        "• Foreground service: To run in background")
+                        "• Notifications: To display service status")
                 .setPositiveButton("Grant") { _, _ ->
                     permissionLauncher.launch(missingPermissions.toTypedArray())
                 }
@@ -228,7 +227,6 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
     
-    @RequiresApi(Build.VERSION_CODES.P)
     private fun checkOverlayPermission() {
         if (!hasOverlayPermission()) {
             AlertDialog.Builder(this)
@@ -245,7 +243,6 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
     
-    @RequiresApi(Build.VERSION_CODES.P)
     private fun updatePermissionStatus() {
         val hasPermissions = hasAllPermissions()
         val hasOverlay = hasOverlayPermission()
