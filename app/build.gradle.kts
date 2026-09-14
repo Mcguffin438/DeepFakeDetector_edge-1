@@ -1,3 +1,5 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -53,9 +55,15 @@ android {
     }
 }
 
+fun compilerOptions(function: () -> Unit) {}
+
 kotlin {
     compilerOptions {
-        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_11)
+        val jvmTarget = null
+        jvmTarget.set(
+            JvmTarget.JVM_11,
+            value = TODO()
+        )
     }
 }
 
