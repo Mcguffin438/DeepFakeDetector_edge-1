@@ -1,36 +1,42 @@
-# Comprehensive Code Review & Improvements Plan
+# Implementation Plan - Integrate PyTorch ExecuTorch
 
-Following a complete review of all source files in the project (`MainActivity.kt`, `RealTimeAudioDetectionService.kt`, `AudioProcessor.kt`, `OverlayView.kt`, `PhoneStateReceiver.kt`, `AndroidManifest.xml`, and build configurations), several architectural, robustness, and performance improvements have been identified.
+This plan outlines the integration of **PyTorch ExecuTorch** into the Android application. ExecuTorch is the next-generation on-device inference engine from PyTorch, optimized for edge devices.
+
+> [!IMPORTANT]
+> **Model Format Compatibility**: ExecuTorch uses the `.pte` model format. The current `knn_modelv2.onnx` file is an ONNX model and cannot be run directly by the ExecuTorch runtime without conversion to the ExecuTorch-compatible ATen dialect and exported as a `.pte` file. This plan sets up the infrastructure to support ExecuTorch inference once a `.pte` model is provided.
 
 ## User Review Required
 
-> [!IMPORTANT]
-> **ONNX Environment Management**: In ONNX Runtime Java, `OrtEnvironment.getEnvironment()` returns a process-wide singleton environment. Calling `.close()` on it in `RealTimeAudioDetectionService.onDestroy()` can close the shared environment prematurely if other components or service restarts occur. We recommend omitting `ortEnv?.close()` or properly managing it.
-
-> [!NOTE]
-> **Audio Recording Sources (`VOICE_DOWNLINK` / `VOICE_CALL`)**: On Android 9 (API 28) and above, recording audio from `VOICE_DOWNLINK` or `VOICE_CALL` is restricted by Android system security to system/dialer apps. While the service iterates through fallback sources (`VOICE_COMMUNICATION`, `MIC`), attempting restricted sources will generate security/IllegalArgument warnings in Logcat.
-
----
+> [!WARNING]
+> **ExecuTorch Stability**: ExecuTorch is currently in a beta/early-access phase. The API and dependency coordinates may shift. We are using the most recent stable-release coordinates (`0.4.0`/`0.5.0` series).
 
 ## Proposed Changes
 
-### [Service & Lifecycle] RealTimeAudioDetectionService.kt
-- **ONNX Environment Cleanup**: Prevent closing the singleton `OrtEnvironment` in `onDestroy()` to avoid process-level crashes on service restart.
-- **Audio Recording Fallback Logging**: Optimize audio source fallback sequence to prioritize `VOICE_COMMUNICATION` and `MIC` on modern Android versions where `VOICE_DOWNLINK` / `VOICE_CALL` are restricted.
+### [Dependencies]
+#### [MODIFY] [libs.versions.toml](file:///C:/Users/dusty/Desktop/DeepFakeDetector_edge/gradle/libs.versions.toml)
+- Add ExecuTorch version and library definitions.
+- Coordinate: `org.pytorch:executorch:0.4.0` (Core runtime).
 
-### [Audio Processing] AudioProcessor.kt
-- **Performance Optimization**: Add caching for pre-computed trig tables in `computeDFT` or document performance characteristics for audio frame feature generation.
+#### [MODIFY] [build.gradle.kts](file:///C:/Users/dusty/Desktop/DeepFakeDetector_edge/app/build.gradle.kts)
+- Add ExecuTorch dependency to the `dependencies` block.
 
-### [UI & Overlay] OverlayView.kt & MainActivity.kt
-- **Accessibility & Lint Warnings**: Address minor lint warnings (e.g., string literals in `setText`, API version checks).
+### [Inference Layer]
+#### [NEW] [ExecuTorchProcessor.kt](file:///C:/Users/dusty/Desktop/DeepFakeDetector_edge/app/src/main/java/com/example/realtimeaudiodetect/ExecuTorchProcessor.kt)
+- Create a dedicated processor for ExecuTorch inference.
+- Methods for loading the `.pte` model from assets and executing forward passes.
 
----
+### [Service Layer]
+#### [MODIFY] [RealTimeAudioDetectionService.kt](file:///C:/Users/dusty/Desktop/DeepFakeDetector_edge/app/src/main/java/com/example/realtimeaudiodetect/RealTimeAudioDetectionService.kt)
+- Integrate `ExecuTorchProcessor` into the service lifecycle.
+- Add support for loading `knn_modelv2.pte` (as a future-proof path for the ONNX model's ExecuTorch equivalent).
+- Provide a fallback/toggle mechanism between ONNX Runtime and ExecuTorch.
 
 ## Verification Plan
 
 ### Automated Tests
-- Run Gradle build (`app:assembleDebug`) to ensure all code compiles cleanly.
+- Run Gradle sync to verify dependency resolution.
+- Run `app:assembleDebug` to ensure compilation success.
 
 ### Manual Verification
-- Deploy app to a test device/emulator.
-- Verify service start/stop, audio feature extraction, inference execution, and UI overlay rendering.
+- Deploy to device.
+- Verify through logs that the service attempts to initialize ExecuTorch if a `.pte` model is detected in the assets.

@@ -19,6 +19,9 @@ mockito = "5.23.0"
 onnxruntime = "1.29.0"
 kotlindl = "0.5.2"
 opencv = "4.5.3"
+executorch = "0.1.0-SNAPSHOT"
+litertApi = "2.2.0"
+firebaseSessions = "3.0.8"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -37,7 +40,8 @@ kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-cor
 # ML & Signal Processing
 opencv = { group = "com.quickbirdstudios", name = "opencv", version.ref = "opencv" }
 onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
-kotlindl-onnx = { group = "org.jetbrains.kotlinx", name = "kotlin-deeplearning-onnx", version.ref = "kotlindl" }
+kotlindl-onnx = { group = "org.jetbrains.kotlin", name = "kotlin-deeplearning-onnx", version.ref = "kotlindl" }
+executorch = { group = "org.pytorch", name = "executorch-runtime-android", version.ref = "executorch" }
 
 # Testing
 junit = { group = "junit", name = "junit", version.ref = "junit" }
@@ -54,6 +58,8 @@ androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-toolin
 androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
+litert-api = { group = "com.google.ai.edge.litert", name = "litert-api", version.ref = "litertApi" }
+firebase-sessions = { group = "com.google.firebase", name = "firebase-sessions", version.ref = "firebaseSessions" }
 
 [bundles]
 coroutines = ["kotlinx-coroutines-android", "kotlinx-coroutines-core"]

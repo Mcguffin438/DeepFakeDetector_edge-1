@@ -64,6 +64,10 @@ class RealTimeAudioDetectionService : Service() {
     private var isSpeakerphoneRequested = false
     private var audioFocusRequest: AudioFocusRequest? = null
     
+    // ExecuTorch ML inference
+    private var executorchProcessor: ExecuTorchProcessor? = null
+    private var useExecuTorch = false
+
     // ONNX ML inference
     private var ortEnv: OrtEnvironment? = null
     private var ortSession: OrtSession? = null
@@ -109,6 +113,7 @@ class RealTimeAudioDetectionService : Service() {
         super.onCreate()
         createNotificationChannel()
         initializeWindowManager()
+        executorchProcessor = ExecuTorchProcessor(this)
         Timber.d("RealTimeAudioDetectionService created")
     }
     
@@ -132,7 +137,23 @@ class RealTimeAudioDetectionService : Service() {
         isIncomingCall = intent.getBooleanExtra(EXTRA_IS_INCOMING, false)
         
         startForeground(NOTIFICATION_ID, createNotification("Preparing for call monitoring..."))
-        serviceScope.launch(Dispatchers.IO) { loadDeepfakeModel() }
+        serviceScope.launch(Dispatchers.IO) { 
+            // Try loading ExecuTorch first if pte exists, else fallback to ONNX
+            val etLoaded = executorchProcessor?.loadModel("knn_modelv2.pte") ?: false
+            if (etLoaded) {
+                useExecuTorch = true
+                isModelLoaded.set(true)
+                Timber.i("Using ExecuTorch for inference")
+                
+                serviceScope.launch(Dispatchers.Main) {
+                    val notification = createNotification("ExecuTorch model loaded - Ready")
+                    val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                    nm.notify(NOTIFICATION_ID, notification)
+                }
+            } else {
+                loadDeepfakeModel() 
+            }
+        }
     }
     
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
@@ -375,30 +396,39 @@ class RealTimeAudioDetectionService : Service() {
     }
 
     private suspend fun processAudioChunk(audioData: ShortArray, chunkId: Int) {
-        var onnxInput: OnnxTensor? = null
-        var results: OrtSession.Result? = null
         try {
-            if (!isModelLoaded.get() || ortSession == null) return
+            if (!isModelLoaded.get()) return
 
             val featuresResult = audioProcessor.generateMultiChannelFeatures(audioData, SAMPLE_RATE)
             if (featuresResult.error != null) return
 
-            val inputName = ortSession?.inputNames?.iterator()?.next() ?: return
-            onnxInput = buildOnnxInputTensor(featuresResult)
-            if (onnxInput == null) return
-
-            results = ortSession!!.run(mapOf(inputName to onnxInput))
-
-            val fakeProb = try {
-                if (results.size() > 1) {
-                    @Suppress("UNCHECKED_CAST")
-                    val probsMap = results[1].value as? List<Map<Long, Float>>
-                    probsMap?.firstOrNull()?.get(1L) ?: 0.5f
-                } else {
-                    val outputValue = results[0].value as? FloatArray
-                    outputValue?.firstOrNull() ?: 0.5f
+            val fakeProb = if (useExecuTorch && executorchProcessor != null) {
+                // ExecuTorch implementation
+                val shape = longArrayOf(1, 3, 64, featuresResult.timeSteps.toLong())
+                executorchProcessor!!.predict(featuresResult.features, shape)
+            } else if (ortSession != null) {
+                // ONNX implementation
+                val inputName = ortSession?.inputNames?.iterator()?.next() ?: return
+                val onnxInput = buildOnnxInputTensor(featuresResult) ?: return
+                
+                val results = ortSession!!.run(mapOf(inputName to onnxInput))
+                val prob = try {
+                    if (results.size() > 1) {
+                        @Suppress("UNCHECKED_CAST")
+                        val probsMap = results[1].value as? List<Map<Long, Float>>
+                        probsMap?.firstOrNull()?.get(1L) ?: 0.5f
+                    } else {
+                        val outputValue = results[0].value as? FloatArray
+                        outputValue?.firstOrNull() ?: 0.5f
+                    }
+                } catch (e: Exception) {
+                    0.5f
+                } finally {
+                    results.close()
+                    onnxInput.close()
                 }
-            } catch (e: Exception) {
+                prob
+            } else {
                 0.5f
             }
 
@@ -414,13 +444,6 @@ class RealTimeAudioDetectionService : Service() {
             lastDetectionTime = System.currentTimeMillis()
         } catch (e: Exception) {
             Timber.e(e, "Error in processAudioChunk")
-        } finally {
-            try {
-                results?.close()
-                onnxInput?.close()
-            } catch (e: Exception) {
-                Timber.e(e)
-            }
         }
     }
 
@@ -592,6 +615,7 @@ class RealTimeAudioDetectionService : Service() {
         super.onDestroy()
         stopAudioMonitoring()
         hideOverlay()
+        executorchProcessor?.close()
         try {
             ortSession?.close()
             ortEnv?.close()

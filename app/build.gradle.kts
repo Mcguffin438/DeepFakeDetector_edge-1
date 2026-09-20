@@ -67,6 +67,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.fragment.ktx)
+    implementation(libs.firebase.sessions)
+    implementation(libs.litert.api)
 
     // UI Components
     implementation(libs.material)
@@ -92,6 +94,9 @@ dependencies {
     // ONNX Support
     implementation(libs.onnxruntime.android)
     implementation(libs.kotlindl.onnx)
+
+    // ExecuTorch Support
+    implementation(libs.executorch)
 
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
