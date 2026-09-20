@@ -139,7 +139,7 @@ class RealTimeAudioDetectionService : Service() {
         startForeground(NOTIFICATION_ID, createNotification("Preparing for call monitoring..."))
         serviceScope.launch(Dispatchers.IO) { 
             // Try loading ExecuTorch first if pte exists, else fallback to ONNX
-            val etLoaded = executorchProcessor?.loadModel("knn_modelv2.pte") ?: false
+            val etLoaded = executorchProcessor?.loadModel("knn_modelv2.pte",,) ?: false
             if (etLoaded) {
                 useExecuTorch = true
                 isModelLoaded.set(true)
@@ -405,7 +405,7 @@ class RealTimeAudioDetectionService : Service() {
             val fakeProb = if (useExecuTorch && executorchProcessor != null) {
                 // ExecuTorch implementation
                 val shape = longArrayOf(1, 3, 64, featuresResult.timeSteps.toLong())
-                executorchProcessor!!.predict(featuresResult.features, shape)
+                executorchProcessor!!.predict(featuresResult.features, shape,)
             } else if (ortSession != null) {
                 // ONNX implementation
                 val inputName = ortSession?.inputNames?.iterator()?.next() ?: return

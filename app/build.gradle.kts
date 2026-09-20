@@ -67,8 +67,6 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.fragment.ktx)
-    implementation(libs.firebase.sessions)
-    implementation(libs.litert.api)
 
     // UI Components
     implementation(libs.material)

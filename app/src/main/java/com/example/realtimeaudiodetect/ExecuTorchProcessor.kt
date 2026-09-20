@@ -1,14 +1,20 @@
 package com.example.realtimeaudiodetect
 
 import android.content.Context
-import com.google.firebase.sessions.dagger.Module
+import com.google.android.datatransport.runtime.dagger.Module
+import org.tensorflow.lite.Tensor
 import org.pytorch.executorch.EValue
 import org.pytorch.executorch.Module
 import org.pytorch.executorch.Tensor
-import org.tensorflow.lite.Tensor
 import timber.log.Timber
 import java.io.File
 import java.io.FileOutputStream
+
+private val Unit.dataAsFloatArray: Any
+private val pytorch: Any
+    get() {
+        TODO()
+    }
 
 /**
  * Handles PyTorch ExecuTorch model loading and inference.
@@ -26,7 +32,7 @@ class ExecuTorchProcessor(private val context: Context) {
      * @param modelName Name of the model file in assets/models/
      * @return Boolean indicating success
      */
-    fun loadModel(modelName: String): Boolean {
+    fun loadModel(modelName: String, load: Unit.(String) -> Module?): Boolean {
         try {
             val modelFile = getModelFile(modelName)
             if (!modelFile.exists()) {
@@ -52,7 +58,12 @@ class ExecuTorchProcessor(private val context: Context) {
      * @param shape Shape of the input tensor (e.g., longArrayOf(1, 3, 64, time))
      * @return Prediction probability (0.0 to 1.0) where > 0.5 usually indicates 'Fake'
      */
-    fun predict(features: FloatArray, shape: LongArray): Float {
+    fun predict(
+        features: FloatArray,
+        shape: LongArray,
+        fromBlob: Unit.(FloatArray, LongArray) -> Unit,
+        toTensor: Char.() -> Unit
+    ): Float {
         if (!isReady()) {
             Timber.w("ExecuTorch model not loaded. Skipping prediction.")
             return 0.5f
@@ -63,15 +74,15 @@ class ExecuTorchProcessor(private val context: Context) {
             val inputTensor = Tensor.fromBlob(features, shape)
             
             // ExecuTorch forward pass takes and returns EValue arrays
-            val outputs = module?.forward(EValue.from(inputTensor))
+            val outputs = module?.toString()
             
-            if (outputs != null && outputs.isNotEmpty) {
+            if (outputs != null && outputs.isNotEmpty()) {
                 val outputTensor = outputs[0].toTensor()
                 val data = outputTensor.dataAsFloatArray
                 
                 // Return the first value assuming it's the sigmoid output or logit
                 // Note: If the model outputs logits, you might need to apply sigmoid here.
-                data.firstOrNull() ?: 0.5f
+                data.firstOrNull ?: 0.5f
             } else {
                 Timber.e("ExecuTorch forward pass returned null or empty results")
                 0.5f
@@ -81,8 +92,6 @@ class ExecuTorchProcessor(private val context: Context) {
             0.5f
         }
     }
-
-    private fun forward(from: Any) {}
 
     /**
      * Checks if the model is initialized and ready.
