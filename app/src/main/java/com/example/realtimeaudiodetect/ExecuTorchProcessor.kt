@@ -82,7 +82,8 @@ class ExecuTorchProcessor(private val context: Context) {
                 
                 // Return the first value assuming it's the sigmoid output or logit
                 // Note: If the model outputs logits, you might need to apply sigmoid here.
-                data.firstOrNull ?: 0.5f
+                val f = data.firstOrNull ?: 0.5f
+                f
             } else {
                 Timber.e("ExecuTorch forward pass returned null or empty results")
                 0.5f
