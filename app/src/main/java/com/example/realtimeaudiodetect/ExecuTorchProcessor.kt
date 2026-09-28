@@ -1,20 +1,15 @@
 package com.example.realtimeaudiodetect
 
 import android.content.Context
-import com.google.android.datatransport.runtime.dagger.Module
+import com.google.firebase.sessions.dagger.Module
 import org.tensorflow.lite.Tensor
-import org.pytorch.executorch.EValue
-import org.pytorch.executorch.Module
-import org.pytorch.executorch.Tensor
+//import org.tensorflow.lite.Tensor
+//import org.pytorch.executorch.Tensor
 import timber.log.Timber
 import java.io.File
 import java.io.FileOutputStream
 
-private val Unit.dataAsFloatArray: Any
-private val pytorch: Any
-    get() {
-        TODO()
-    }
+
 
 /**
  * Handles PyTorch ExecuTorch model loading and inference.
@@ -32,23 +27,28 @@ class ExecuTorchProcessor(private val context: Context) {
      * @param modelName Name of the model file in assets/models/
      * @return Boolean indicating success
      */
+    @Synchronized
     fun loadModel(modelName: String, load: Unit.(String) -> Module?): Boolean {
-        try {
+        return try {
             val modelFile = getModelFile(modelName)
             if (!modelFile.exists()) {
                 Timber.e("ExecuTorch model file not found: ${modelFile.absolutePath}")
                 return false
             }
 
+            // Clear previous module reference
+            module = null
+
             // ExecuTorch Module.load() takes the path to the .pte file
             module = Module.load(modelFile.absolutePath)
             isLoaded = true
             Timber.i("✅ ExecuTorch model loaded successfully: $modelName")
-            return true
+            true
         } catch (e: Exception) {
             Timber.e(e, "❌ Failed to load ExecuTorch model: $modelName")
+            module = null
             isLoaded = false
-            return false
+            false
         }
     }
 
