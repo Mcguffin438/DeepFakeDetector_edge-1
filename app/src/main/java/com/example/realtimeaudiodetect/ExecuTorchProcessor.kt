@@ -1,21 +1,17 @@
 package com.example.realtimeaudiodetect
 
 import android.content.Context
-import com.google.firebase.sessions.dagger.Module
-import org.tensorflow.lite.Tensor
-//import org.tensorflow.lite.Tensor
-//import org.pytorch.executorch.Tensor
+import org.pytorch.Module
+import org.pytorch.Tensor
+import org.pytorch.IValue
 import timber.log.Timber
 import java.io.File
 import java.io.FileOutputStream
 
-
-
 /**
- * Handles PyTorch ExecuTorch model loading and inference.
+ * Handles PyTorch model loading and inference (PyTorch Mobile / ExecuTorch runtime).
  * Optimized for edge deployment on Android.
- * Note: ExecuTorch requires models in .pte format. 
- * Ensure knn_modelv2.pte is present in assets/models/.
+ * Note: Requires model file (e.g. knn_modelv2.pte or .pt) in assets/models/.
  */
 class ExecuTorchProcessor(private val context: Context) {
 
@@ -23,29 +19,31 @@ class ExecuTorchProcessor(private val context: Context) {
     private var isLoaded = false
 
     /**
-     * Loads the ExecuTorch model (.pte) from assets.
+     * Loads the model from assets.
      * @param modelName Name of the model file in assets/models/
      * @return Boolean indicating success
      */
     @Synchronized
-    fun loadModel(modelName: String, load: Unit.(String) -> Module?): Boolean {
+    fun loadModel(modelName: String): Boolean {
         return try {
             val modelFile = getModelFile(modelName)
-            if (!modelFile.exists()) {
-                Timber.e("ExecuTorch model file not found: ${modelFile.absolutePath}")
+            if (!modelFile.exists() || modelFile.length() == 0L) {
+                Timber.e("Model file not found or empty: ${modelFile.absolutePath}")
                 return false
             }
 
             // Clear previous module reference
+            module?.destroy()
             module = null
+            isLoaded = false
 
-            // ExecuTorch Module.load() takes the path to the .pte file
+            // Module.load() takes the absolute path to the model file
             module = Module.load(modelFile.absolutePath)
             isLoaded = true
-            Timber.i("✅ ExecuTorch model loaded successfully: $modelName")
+            Timber.i("✅ Model loaded successfully: $modelName")
             true
         } catch (e: Exception) {
-            Timber.e(e, "❌ Failed to load ExecuTorch model: $modelName")
+            Timber.e(e, "❌ Failed to load model: $modelName")
             module = null
             isLoaded = false
             false
@@ -60,12 +58,10 @@ class ExecuTorchProcessor(private val context: Context) {
      */
     fun predict(
         features: FloatArray,
-        shape: LongArray,
-        fromBlob: Unit.(FloatArray, LongArray) -> Unit,
-        toTensor: Char.() -> Unit
+        shape: LongArray
     ): Float {
         if (!isReady()) {
-            Timber.w("ExecuTorch model not loaded. Skipping prediction.")
+            Timber.w("Model not loaded. Skipping prediction.")
             return 0.5f
         }
 
@@ -73,23 +69,19 @@ class ExecuTorchProcessor(private val context: Context) {
             // Create input tensor from the raw feature array
             val inputTensor = Tensor.fromBlob(features, shape)
             
-            // ExecuTorch forward pass takes and returns EValue arrays
-            val outputs = module?.toString()
+            // Forward pass takes IValue and returns IValue
+            val outputIValue = module?.forward(IValue.from(inputTensor))
+            val outputTensor = outputIValue?.toTensor()
+            val data = outputTensor?.dataAsFloatArray
             
-            if (outputs != null && outputs.isNotEmpty()) {
-                val outputTensor = outputs[0].toTensor()
-                val data = outputTensor.dataAsFloatArray
-                
-                // Return the first value assuming it's the sigmoid output or logit
-                // Note: If the model outputs logits, you might need to apply sigmoid here.
-                val f = data.firstOrNull ?: 0.5f
-                f
+            if (data != null && data.isNotEmpty()) {
+                data[0]
             } else {
-                Timber.e("ExecuTorch forward pass returned null or empty results")
+                Timber.e("Model forward pass returned null or empty results")
                 0.5f
             }
         } catch (e: Exception) {
-            Timber.e(e, "ExecuTorch inference failed: ${e.message}")
+            Timber.e(e, "Inference failed: ${e.message}")
             0.5f
         }
     }
@@ -103,16 +95,17 @@ class ExecuTorchProcessor(private val context: Context) {
      * Clears the module reference.
      */
     fun close() {
+        module?.destroy()
         module = null
         isLoaded = false
     }
 
     /**
-     * Internal helper to copy the model from assets to internal storage if needed.
+     * Internal helper to model copy from assets to internal storage if needed.
      */
     private fun getModelFile(modelName: String): File {
         val internalFile = File(context.filesDir, modelName)
-        if (!internalFile.exists()) {
+        if (!internalFile.exists() || internalFile.length() == 0L) {
             try {
                 context.assets.open("models/$modelName").use { input ->
                     FileOutputStream(internalFile).use { output ->

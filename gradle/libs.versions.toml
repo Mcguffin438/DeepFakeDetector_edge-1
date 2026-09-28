@@ -19,7 +19,7 @@ mockito = "5.23.0"
 onnxruntime = "1.29.0"
 kotlindl = "0.5.2"
 opencv = "4.5.3"
-executorch = "0.4.0-SNAPSHOT"
+executorch = "2.1.0"
 transportRuntime = "4.1.1"
 litertApi = "2.2.0"
 firebaseSessions = "3.0.8"
@@ -42,7 +42,7 @@ kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-cor
 opencv = { group = "com.quickbirdstudios", name = "opencv", version.ref = "opencv" }
 onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
 kotlindl-onnx = { group = "org.jetbrains.kotlinx", name = "kotlin-deeplearning-onnx", version.ref = "kotlindl" }
-executorch = { group = "org.pytorch", name = "executorch", version.ref = "executorch" }
+executorch = { group = "org.pytorch", name = "pytorch_android_lite", version.ref = "executorch" }
 
 # Testing
 junit = { group = "junit", name = "junit", version.ref = "junit" }

@@ -6,7 +6,6 @@ package com.example.realtimeaudiodetect
 
 import android.Manifest
 import android.app.*
-import android.content.Context
 import android.content.Intent
 import android.media.*
 import android.os.Binder
@@ -22,6 +21,7 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import ai.onnxruntime.TensorInfo
+import android.graphics.PixelFormat
 import java.nio.FloatBuffer
 import java.io.FileOutputStream
 import java.util.concurrent.atomic.AtomicBoolean
@@ -139,7 +139,7 @@ class RealTimeAudioDetectionService : Service() {
         startForeground(NOTIFICATION_ID, createNotification("Preparing for call monitoring..."))
         serviceScope.launch(Dispatchers.IO) { 
             // Try loading ExecuTorch first if pte exists, else fallback to ONNX
-            val etLoaded = executorchProcessor?.loadModel("knn_modelv2.pte",,) ?: false
+            val etLoaded = executorchProcessor?.loadModel("knn_modelv2.pte") ?: false
             if (etLoaded) {
                 useExecuTorch = true
                 isModelLoaded.set(true)
@@ -147,7 +147,7 @@ class RealTimeAudioDetectionService : Service() {
                 
                 serviceScope.launch(Dispatchers.Main) {
                     val notification = createNotification("ExecuTorch model loaded - Ready")
-                    val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                    val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
                     nm.notify(NOTIFICATION_ID, notification)
                 }
             } else {
@@ -219,7 +219,7 @@ class RealTimeAudioDetectionService : Service() {
 
             serviceScope.launch(Dispatchers.Main) {
                 val notification = createNotification("Model loaded - Ready to analyze audio")
-                val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
                 notificationManager.notify(NOTIFICATION_ID, notification)
             }
 
@@ -228,7 +228,7 @@ class RealTimeAudioDetectionService : Service() {
             isModelLoaded.set(false)
             serviceScope.launch(Dispatchers.Main) {
                 val notification = createNotification("Model loading failed - Check logs")
-                val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
                 notificationManager.notify(NOTIFICATION_ID, notification)
             }
         }
@@ -282,7 +282,7 @@ class RealTimeAudioDetectionService : Service() {
             audioRecord?.startRecording()
             isRecording.set(true)
             
-            val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
             originalAudioMode = audioManager.mode
             originalSpeakerState = isSpeakerphoneActive()
             
@@ -318,7 +318,7 @@ class RealTimeAudioDetectionService : Service() {
         }
         audioRecord = null
         
-        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
         audioManager.mode = originalAudioMode
         setSpeakerphoneOn(originalSpeakerState)
         
@@ -405,7 +405,9 @@ class RealTimeAudioDetectionService : Service() {
             val fakeProb = if (useExecuTorch && executorchProcessor != null) {
                 // ExecuTorch implementation
                 val shape = longArrayOf(1, 3, 64, featuresResult.timeSteps.toLong())
-                executorchProcessor!!.predict(featuresResult.features, shape,)
+                executorchProcessor!!.predict(
+                    featuresResult.features, shape
+                )
             } else if (ortSession != null) {
                 // ONNX implementation
                 val inputName = ortSession?.inputNames?.iterator()?.next() ?: return
@@ -521,7 +523,7 @@ class RealTimeAudioDetectionService : Service() {
     fun getCallRecordingInfo(): String = "Monitoring active"
     
     private fun isSpeakerphoneActive(): Boolean {
-        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return false
+        val am = getSystemService(AUDIO_SERVICE) as? AudioManager ?: return false
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             am.communicationDevice?.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
         } else {
@@ -530,7 +532,7 @@ class RealTimeAudioDetectionService : Service() {
     }
     
     private fun setSpeakerphoneOn(enabled: Boolean) {
-        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        val am = getSystemService(AUDIO_SERVICE) as? AudioManager ?: return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (enabled) {
                 if (!isSpeakerphoneRequested) {
@@ -564,7 +566,7 @@ class RealTimeAudioDetectionService : Service() {
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-                android.graphics.PixelFormat.TRANSLUCENT
+                PixelFormat.TRANSLUCENT
             )
             windowManager?.addView(overlayView, params)
         } catch (e: Exception) { Timber.e(e) }
@@ -587,13 +589,13 @@ class RealTimeAudioDetectionService : Service() {
     }
     
     private fun initializeWindowManager() {
-        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
     }
     
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(CHANNEL_ID, "Deepfake Detection", NotificationManager.IMPORTANCE_LOW)
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             nm.createNotificationChannel(channel)
         }
     }
