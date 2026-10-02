@@ -92,8 +92,10 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
 
     // ONNX Support
-    implementation(libs.onnxruntime.android)
-    implementation(libs.kotlindl.onnx)
+    implementation(libs.onnxruntime.qnn)
+    implementation(libs.kotlindl.onnx) {
+        exclude(group = "com.microsoft.onnxruntime", module = "onnxruntime-android")
+    }
 
     // ExecuTorch Support
     implementation(libs.executorch)

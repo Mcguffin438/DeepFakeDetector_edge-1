@@ -64,10 +64,6 @@ class RealTimeAudioDetectionService : Service() {
     private var isSpeakerphoneRequested = false
     private var audioFocusRequest: AudioFocusRequest? = null
     
-    // ExecuTorch ML inference
-    private var executorchProcessor: ExecuTorchProcessor? = null
-    private var useExecuTorch = false
-
     // ONNX ML inference
     private var ortEnv: OrtEnvironment? = null
     private var ortSession: OrtSession? = null
@@ -113,7 +109,6 @@ class RealTimeAudioDetectionService : Service() {
         super.onCreate()
         createNotificationChannel()
         initializeWindowManager()
-        executorchProcessor = ExecuTorchProcessor(this)
         Timber.d("RealTimeAudioDetectionService created")
     }
     
@@ -138,21 +133,7 @@ class RealTimeAudioDetectionService : Service() {
         
         startForeground(NOTIFICATION_ID, createNotification("Preparing for call monitoring..."))
         serviceScope.launch(Dispatchers.IO) { 
-            // Try loading ExecuTorch first if pte exists, else fallback to ONNX
-            val etLoaded = executorchProcessor?.loadModel("knn_modelv2.pte") ?: false
-            if (etLoaded) {
-                useExecuTorch = true
-                isModelLoaded.set(true)
-                Timber.i("Using ExecuTorch for inference")
-                
-                serviceScope.launch(Dispatchers.Main) {
-                    val notification = createNotification("ExecuTorch model loaded - Ready")
-                    val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-                    nm.notify(NOTIFICATION_ID, notification)
-                }
-            } else {
-                loadDeepfakeModel() 
-            }
+            loadDeepfakeModel() 
         }
     }
     
@@ -197,12 +178,18 @@ class RealTimeAudioDetectionService : Service() {
             ortEnv = OrtEnvironment.getEnvironment()
             val sessionOptions = OrtSession.SessionOptions()
             try {
-                // Prefer NNAPI on Android. On Qualcomm devices NNAPI may route to the Snapdragon GPU/NPU.
-                sessionOptions.addNnapi()
-                Timber.i("Using NNAPI execution provider (may route to Snapdragon accelerator)")
+                // Attempt Qualcomm QNN execution provider first
+                sessionOptions.addQnn(emptyMap())
+                Timber.i("Using Qualcomm QNN execution provider for NPU acceleration")
             } catch (e: Exception) {
-                // If NNAPI provider is not present in the build, fall back to default CPU provider
-                Timber.w(e, "NNAPI not available - falling back to default execution provider")
+                Timber.w(e, "QNN EP not available - attempting NNAPI fallback")
+                try {
+                    // Fallback to Android NNAPI execution provider
+                    sessionOptions.addNnapi()
+                    Timber.i("Using NNAPI execution provider")
+                } catch (e2: Exception) {
+                    Timber.w(e2, "NNAPI not available - falling back to default CPU provider")
+                }
             }
             ortSession = ortEnv!!.createSession(modelFile.absolutePath, sessionOptions)
             isModelLoaded.set(true)
@@ -402,13 +389,7 @@ class RealTimeAudioDetectionService : Service() {
             val featuresResult = audioProcessor.generateMultiChannelFeatures(audioData, SAMPLE_RATE)
             if (featuresResult.error != null) return
 
-            val fakeProb = if (useExecuTorch && executorchProcessor != null) {
-                // ExecuTorch implementation
-                val shape = longArrayOf(1, 3, 64, featuresResult.timeSteps.toLong())
-                executorchProcessor!!.predict(
-                    featuresResult.features, shape
-                )
-            } else if (ortSession != null) {
+            val fakeProb = if (ortSession != null) {
                 // ONNX implementation
                 val inputName = ortSession?.inputNames?.iterator()?.next() ?: return
                 val onnxInput = buildOnnxInputTensor(featuresResult) ?: return
@@ -617,7 +598,6 @@ class RealTimeAudioDetectionService : Service() {
         super.onDestroy()
         stopAudioMonitoring()
         hideOverlay()
-        executorchProcessor?.close()
         try {
             ortSession?.close()
             ortEnv?.close()

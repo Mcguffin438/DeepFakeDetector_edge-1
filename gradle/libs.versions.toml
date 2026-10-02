@@ -41,6 +41,7 @@ kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-cor
 # ML & Signal Processing
 opencv = { group = "com.quickbirdstudios", name = "opencv", version.ref = "opencv" }
 onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
+onnxruntime-qnn = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android-qnn", version.ref = "onnxruntime" }
 kotlindl-onnx = { group = "org.jetbrains.kotlinx", name = "kotlin-deeplearning-onnx", version.ref = "kotlindl" }
 executorch = { group = "org.pytorch", name = "pytorch_android_lite", version.ref = "executorch" }
 
