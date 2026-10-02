@@ -151,6 +151,7 @@ class RealTimeAudioDetectionService : Service() {
         startDetectionSession()
     }
 
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     private fun startDetectionSession() {
         pendingStartIntent = null
         startForeground(NOTIFICATION_ID, createNotification("Monitoring call for deepfakes..."))
