@@ -86,7 +86,8 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
 
     private data class AudioFileData(
         val samples: ShortArray,
-        val sampleRate: Int
+        val sampleRate: Int,
+        val channelCount: Int
     )
     
     // Animation state
@@ -448,6 +449,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         audioData: ShortArray,
         sampleRate: Int = 16000,
         audioLengthMs: Long = -1L,
+        channelCount: Int = 1,
         callback: (RealTimeAudioDetectionService.AudioAnalysisResult) -> Unit
     ) {
         lifecycleScope.launch {
@@ -478,7 +480,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
                 return@launch
             }
 
-            callback(service.analyzeRawAudio(audioData, sampleRate, audioLengthMs))
+            callback(service.analyzeRawAudio(audioData, sampleRate, audioLengthMs, channelCount))
         }
     }
 
@@ -499,7 +501,8 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
             realConfidence = 1f,
             processingTimeMs = 0L,
             audioLengthMs = -1L,
-            error = message
+            error = message,
+            warning = null
         )
     
     private fun selectAudioFile() {
@@ -539,7 +542,11 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
                     
                     val audioFile = readAudioFile(uri)
                     if (audioFile != null) {
-                        analyzeRawAudio(audioFile.samples, audioFile.sampleRate) { result ->
+                        analyzeRawAudio(
+                            audioFile.samples,
+                            audioFile.sampleRate,
+                            channelCount = audioFile.channelCount
+                        ) { result ->
                             lifecycleScope.launch {
                                 displayAnalysisResult(result)
                                 btnAnalyzeFile.isEnabled = true
@@ -641,12 +648,8 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
 
         val frameCount = size / blockAlign
-        val samples = if (channelCount == 1) {
-            ShortArray(frameCount * 2) { index -> buffer.getShort(start + (index / 2) * 2) }
-        } else {
-            ShortArray(frameCount * channelCount) { index -> buffer.getShort(start + index * 2) }
-        }
-        return AudioFileData(samples, rate)
+        val samples = ShortArray(frameCount * channelCount) { index -> buffer.getShort(start + index * 2) }
+        return AudioFileData(samples, rate, channelCount)
     }
     
     private fun displayAnalysisResult(result: RealTimeAudioDetectionService.AudioAnalysisResult) {
@@ -665,7 +668,8 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
             }
             val fakePercent = (result.fakeConfidence * 100).toInt()
             val realPercent = (result.realConfidence * 100).toInt()
-            tvConfidenceScores.text = "Real: $realPercent% | Fake: $fakePercent%"
+            val warning = result.warning?.let { "\n$it" }.orEmpty()
+            tvConfidenceScores.text = "Real: $realPercent% | Fake: $fakePercent%$warning"
         }
     }
     

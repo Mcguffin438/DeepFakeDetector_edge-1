@@ -192,7 +192,7 @@ class OverlayView @JvmOverloads constructor(
             else -> {
                 val confidence = (currentResult!!.confidence * 100).toInt()
                 val samples = detectionHistory.size
-                "Confidence: $confidence% • Samples: $samples"
+                "Unscaled KNN: $confidence% • Samples: $samples"
             }
         }
         

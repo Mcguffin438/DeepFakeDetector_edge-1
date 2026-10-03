@@ -15,6 +15,7 @@ import android.view.WindowManager
 import androidx.annotation.RequiresPermission
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
 import timber.log.Timber
 import java.io.File
 import java.io.IOException
@@ -51,6 +52,8 @@ class RealTimeAudioDetectionService : Service() {
         
         private const val AUDIO_CHUNK_DURATION_MS = 6000   // 6s chunks
         private const val OVERLAP_DURATION_MS = 500        // 0.5s overlap
+        private const val KNN_FEATURE_COUNT = 25
+        const val MODEL_WARNING = "Experimental result: KNN StandardScaler parameters are missing."
 
         @Volatile
         var isActive = false
@@ -104,7 +107,8 @@ class RealTimeAudioDetectionService : Service() {
         val isFake: Boolean,
         val confidence: Float,
         val audioChunkId: Int = -1,
-        val processingTimeMs: Long = 0L
+        val processingTimeMs: Long = 0L,
+        val warning: String? = MODEL_WARNING
     )
     
     data class AudioAnalysisResult(
@@ -114,7 +118,8 @@ class RealTimeAudioDetectionService : Service() {
         val realConfidence: Float,
         val processingTimeMs: Long,
         val audioLengthMs: Long,
-        val error: String? = null
+        val error: String? = null,
+        val warning: String? = MODEL_WARNING
     )
     
     override fun onCreate() {
@@ -182,7 +187,7 @@ class RealTimeAudioDetectionService : Service() {
     private fun startDetectionSession() {
         if (isStopping.get()) return
         pendingStartIntent = null
-        startForeground(NOTIFICATION_ID, createNotification("Monitoring call for deepfakes..."))
+        startForeground(NOTIFICATION_ID, createNotification("Monitoring speakerphone audio - experimental KNN"))
         showOverlay()
         startAudioMonitoring()
     }
@@ -248,7 +253,7 @@ class RealTimeAudioDetectionService : Service() {
 
             serviceScope.launch(Dispatchers.Main) {
                 if (isStopping.get()) return@launch
-                val notification = createNotification("Model loaded - Ready to analyze audio")
+                val notification = createNotification("Model loaded - Experimental KNN results")
                 val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
                 notificationManager.notify(NOTIFICATION_ID, notification)
             }
@@ -325,16 +330,28 @@ class RealTimeAudioDetectionService : Service() {
         if (isRecording.get()) return
         
         try {
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                throw SecurityException("Microphone permission has not been granted")
+            }
+
+            val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
+            originalAudioMode = audioManager.mode
+            originalSpeakerState = isSpeakerphoneActive()
+            audioStateCaptured = true
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            if (!originalSpeakerState) {
+                setSpeakerphoneOn(true)
+                speakerphoneChanged = true
+            }
+
             val minBufferBytes = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL_CONFIG, AUDIO_FORMAT)
             if (minBufferBytes <= 0) {
                 throw IllegalStateException("Unsupported audio format or sample rate (AudioRecord error $minBufferBytes)")
             }
             val bufferSizeBytes = minBufferBytes * BUFFER_SIZE_FACTOR
             val audioSources = arrayOf(
-                MediaRecorder.AudioSource.VOICE_DOWNLINK,
-                MediaRecorder.AudioSource.VOICE_CALL,
-                MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-                MediaRecorder.AudioSource.MIC
+                MediaRecorder.AudioSource.MIC,
+                MediaRecorder.AudioSource.VOICE_COMMUNICATION
             )
             
             for (source in audioSources) {
@@ -358,16 +375,12 @@ class RealTimeAudioDetectionService : Service() {
                 throw IllegalStateException("No supported audio source could initialize")
             }
             
-            audioRecord?.startRecording()
-            if (audioRecord?.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
+            val recorder = audioRecord ?: throw IllegalStateException("AudioRecord was not initialized")
+            recorder.startRecording()
+            if (recorder.recordingState != AudioRecord.RECORDSTATE_RECORDING) {
                 throw IllegalStateException("AudioRecord did not enter recording state")
             }
             isRecording.set(true)
-            
-            val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
-            originalAudioMode = audioManager.mode
-            originalSpeakerState = isSpeakerphoneActive()
-            audioStateCaptured = true
             
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 val focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
@@ -382,12 +395,6 @@ class RealTimeAudioDetectionService : Service() {
                 if (audioManager.requestAudioFocus(focusRequest) != AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
                     Timber.w("Audio focus was not granted")
                 }
-            }
-            
-            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-            if (!originalSpeakerState) {
-                setSpeakerphoneOn(true)
-                speakerphoneChanged = true
             }
             
             audioProcessingJob = serviceScope.launch(Dispatchers.IO) {
@@ -463,6 +470,12 @@ class RealTimeAudioDetectionService : Service() {
         
         val audioBuffer = ShortArray((minBufferBytes + 1) / 2)
         val chunkQueue = ShortArray(chunkSamples)
+        val inferenceQueue = Channel<Pair<Int, ShortArray>>(capacity = 2)
+        val inferenceJob = serviceScope.launch(Dispatchers.IO) {
+            for ((chunkId, chunk) in inferenceQueue) {
+                processAudioChunk(chunk, chunkId)
+            }
+        }
         var queueSize = 0
         var chunkId = 0
         
@@ -479,8 +492,10 @@ class RealTimeAudioDetectionService : Service() {
                             if (queueSize < chunkSamples) {
                                 chunkQueue[queueSize++] = audioBuffer[i]
                             } else {
-                                val chunkToProcess = chunkQueue.copyOf()
-                                processAudioChunk(chunkToProcess, chunkId++)
+                                val chunkToProcess = chunkId++ to chunkQueue.copyOf()
+                                if (inferenceQueue.trySend(chunkToProcess).isFailure) {
+                                    Timber.w("Dropping audio chunk ${chunkToProcess.first}; inference is behind")
+                                }
 
                                 val keepCount = chunkSamples - overlapSamples
                                 System.arraycopy(chunkQueue, overlapSamples, chunkQueue, 0, keepCount)
@@ -498,6 +513,8 @@ class RealTimeAudioDetectionService : Service() {
                 }
             }
         } finally {
+            inferenceQueue.close()
+            inferenceJob.cancelAndJoin()
             if (isRecording.get()) {
                 withContext(Dispatchers.Main) {
                     Timber.w("Audio stream ended unexpectedly; stopping capture")
@@ -507,7 +524,7 @@ class RealTimeAudioDetectionService : Service() {
         }
     }
     
-    private fun buildOnnxInputTensor(featuresResult: MultiChannelFeaturesResult): OnnxTensor {
+    private fun buildOnnxInputTensor(features: FloatArray): OnnxTensor {
         val session = ortSession ?: throw IllegalStateException("ONNX session is not loaded")
         val inputInfo = session.inputInfo
         if (inputInfo.size != 1) {
@@ -517,79 +534,27 @@ class RealTimeAudioDetectionService : Service() {
             ?: throw IllegalStateException("Model input is not a tensor")
         val declaredShape = tensorInfo.shape
         val env = ortEnv ?: throw IllegalStateException("ONNX Runtime environment is not initialized")
-
-        val inputShape: LongArray
-        val inputFeatures: FloatArray
-        when (declaredShape.size) {
-            1 -> {
-                val featureSize = if (declaredShape[0] > 0) declaredShape[0] else {
-                    audioProcessor.poolFeatures(featuresResult).size.toLong()
-                }
-                require(featureSize in 1..Int.MAX_VALUE.toLong()) { "Invalid model feature dimension: $featureSize" }
-                inputShape = longArrayOf(featureSize)
-                inputFeatures = audioProcessor.prepareModelInputVector(featuresResult, featureSize.toInt())
-            }
-            2 -> {
-                val batchSize = declaredShape[0]
-                require(batchSize <= 0 || batchSize == 1L) {
-                    "Only batch size 1 is supported, model requires $batchSize"
-                }
-                val featureSize = if (declaredShape[1] > 0) declaredShape[1] else {
-                    audioProcessor.poolFeatures(featuresResult).size.toLong()
-                }
-                require(featureSize in 1..Int.MAX_VALUE.toLong()) { "Invalid model feature dimension: $featureSize" }
-                inputShape = longArrayOf(1L, featureSize)
-                inputFeatures = audioProcessor.prepareModelInputVector(featuresResult, featureSize.toInt())
-            }
-            4 -> {
-                val batchSize = declaredShape[0]
-                val channels = declaredShape[1]
-                val bins = declaredShape[2]
-                require(batchSize <= 0 || batchSize == 1L) {
-                    "Only batch size 1 is supported, model requires $batchSize"
-                }
-                require(channels <= 0 || channels == featuresResult.shape[0].toLong()) {
-                    "Model expects $channels feature channels, received ${featuresResult.shape[0]}"
-                }
-                require(bins <= 0 || bins == featuresResult.shape[1].toLong()) {
-                    "Model expects $bins feature bins, received ${featuresResult.shape[1]}"
-                }
-                val timeSteps = if (declaredShape[3] > 0) declaredShape[3] else featuresResult.timeSteps.toLong()
-                require(timeSteps in 1..Int.MAX_VALUE.toLong()) { "Invalid model time dimension: $timeSteps" }
-                inputShape = longArrayOf(1L, featuresResult.shape[0].toLong(), featuresResult.shape[1].toLong(), timeSteps)
-                inputFeatures = resizeFeatureTimeAxis(featuresResult, timeSteps.toInt())
-            }
-            else -> throw IllegalStateException(
-                "Unsupported ONNX input rank ${declaredShape.size}; supported ranks are 1, 2, and 4"
-            )
+        require(declaredShape.size == 2) {
+            "Expected the exported KNN model input to have rank 2, found ${declaredShape.size}"
+        }
+        require(declaredShape[0] <= 0 || declaredShape[0] == 1L) {
+            "Only batch size 1 is supported; model declares ${declaredShape[0]}"
+        }
+        require(declaredShape[1] == KNN_FEATURE_COUNT.toLong()) {
+            "KNN model expects $KNN_FEATURE_COUNT features; model declares ${declaredShape[1]}"
+        }
+        require(tensorInfo.type == ai.onnxruntime.OnnxJavaType.FLOAT) {
+            "KNN model requires float input, found ${tensorInfo.type}"
+        }
+        require(features.size == KNN_FEATURE_COUNT) {
+            "Feature extractor produced ${features.size} values; expected $KNN_FEATURE_COUNT"
         }
 
-        return OnnxTensor.createTensor(env, FloatBuffer.wrap(inputFeatures), inputShape)
-    }
-
-    private fun resizeFeatureTimeAxis(
-        featuresResult: MultiChannelFeaturesResult,
-        targetTimeSteps: Int
-    ): FloatArray {
-        val channels = featuresResult.shape[0]
-        val bins = featuresResult.shape[1]
-        val sourceTimeSteps = featuresResult.shape[2]
-        require(sourceTimeSteps > 0) { "Model features have no time steps" }
-        val resized = FloatArray(channels * bins * targetTimeSteps)
-        for (channel in 0 until channels) {
-            for (bin in 0 until bins) {
-                val sourceOffset = (channel * bins + bin) * sourceTimeSteps
-                val targetOffset = (channel * bins + bin) * targetTimeSteps
-                for (targetTime in 0 until targetTimeSteps) {
-                    val sourceTime = minOf(
-                        (targetTime.toLong() * sourceTimeSteps / targetTimeSteps).toInt(),
-                        sourceTimeSteps - 1
-                    )
-                    resized[targetOffset + targetTime] = featuresResult.features[sourceOffset + sourceTime]
-                }
-            }
-        }
-        return resized
+        return OnnxTensor.createTensor(
+            env,
+            FloatBuffer.wrap(features),
+            longArrayOf(1L, KNN_FEATURE_COUNT.toLong())
+        )
     }
 
     private fun extractFakeProbability(results: OrtSession.Result): Float {
@@ -635,12 +600,12 @@ class RealTimeAudioDetectionService : Service() {
         try {
             if (!isModelLoaded.get()) throw IllegalStateException("ONNX model is not loaded")
 
-            val featuresResult = audioProcessor.generateMultiChannelFeatures(audioData, SAMPLE_RATE)
+            val featuresResult = audioProcessor.generateKnnFeatures(audioData, SAMPLE_RATE, CHANNEL_COUNT)
             if (featuresResult.error != null) throw IllegalStateException(featuresResult.error)
 
             val session = ortSession ?: throw IllegalStateException("ONNX session is not loaded")
             val inputName = session.inputNames.firstOrNull() ?: throw IllegalStateException("No model input")
-            val fakeProb = buildOnnxInputTensor(featuresResult).use { input ->
+            val fakeProb = buildOnnxInputTensor(featuresResult.features).use { input ->
                 session.run(mapOf(inputName to input)).use(::extractFakeProbability)
             }
 
@@ -669,19 +634,20 @@ class RealTimeAudioDetectionService : Service() {
     suspend fun analyzeRawAudio(
         audioData: ShortArray,
         sampleRate: Int = SAMPLE_RATE,
-        audioLengthMs: Long = -1L
+        audioLengthMs: Long = -1L,
+        channelCount: Int = 1
     ): AudioAnalysisResult {
         val startTime = android.os.SystemClock.elapsedRealtime()
         return withContext(Dispatchers.IO) {
             try {
                 if (!isModelLoaded.get()) throw IllegalStateException("Model not loaded")
 
-                val featuresResult = audioProcessor.generateMultiChannelFeatures(audioData, sampleRate)
+                val featuresResult = audioProcessor.generateKnnFeatures(audioData, sampleRate, channelCount)
                 if (featuresResult.error != null) throw IllegalStateException(featuresResult.error)
 
                 val session = ortSession ?: throw IllegalStateException("ONNX session is not loaded")
                 val inputName = session.inputNames.firstOrNull() ?: throw IllegalStateException("No model input")
-                val fakeProb = buildOnnxInputTensor(featuresResult).use { input ->
+                val fakeProb = buildOnnxInputTensor(featuresResult.features).use { input ->
                     session.run(mapOf(inputName to input)).use(::extractFakeProbability)
                 }
 
@@ -694,7 +660,8 @@ class RealTimeAudioDetectionService : Service() {
                     fakeConfidence = fakeProb,
                     realConfidence = realProb,
                     processingTimeMs = android.os.SystemClock.elapsedRealtime() - startTime,
-                    audioLengthMs = audioLengthMs
+                    audioLengthMs = audioLengthMs,
+                    warning = MODEL_WARNING
                 )
             } catch (e: CancellationException) {
                 throw e
@@ -707,13 +674,19 @@ class RealTimeAudioDetectionService : Service() {
                     realConfidence = 0f,
                     processingTimeMs = android.os.SystemClock.elapsedRealtime() - startTime,
                     audioLengthMs = audioLengthMs,
-                    error = e.message ?: "Audio analysis failed"
+                    error = e.message ?: "Audio analysis failed",
+                    warning = null
                 )
             }
         }
     }
 
-    suspend fun analyzeRawAudio(audioBytes: ByteArray, sampleRate: Int = SAMPLE_RATE, audioLengthMs: Long = -1L): AudioAnalysisResult {
+    suspend fun analyzeRawAudio(
+        audioBytes: ByteArray,
+        sampleRate: Int = SAMPLE_RATE,
+        audioLengthMs: Long = -1L,
+        channelCount: Int = 1
+    ): AudioAnalysisResult {
         if (audioBytes.size % 2 != 0) {
             return AudioAnalysisResult(
                 isFake = false,
@@ -731,7 +704,7 @@ class RealTimeAudioDetectionService : Service() {
             val high = audioBytes[i * 2 + 1].toInt() and 0xFF
             audioData[i] = ((high shl 8) or low).toShort()
         }
-        return analyzeRawAudio(audioData, sampleRate, audioLengthMs)
+        return analyzeRawAudio(audioData, sampleRate, audioLengthMs, channelCount)
     }
     
     fun isReadyForAnalysis(): Boolean = isModelLoaded.get() && ortSession != null

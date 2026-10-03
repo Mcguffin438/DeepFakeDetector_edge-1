@@ -22,6 +22,11 @@ data class MultiChannelFeaturesResult(
     val error: String? = null          // Error message if any
 )
 
+data class KnnFeatureResult(
+    val features: FloatArray,
+    val error: String? = null
+)
+
 class AudioProcessor {
     
     companion object {
@@ -108,7 +113,7 @@ class AudioProcessor {
                     audioData[i].toFloat() / Short.MAX_VALUE
                 }
             }
-            
+
             // Resample to 16kHz if needed
             val processedAudio = if (sampleRate == 16000) {
                 monoAudio
@@ -197,6 +202,90 @@ class AudioProcessor {
                 timeSteps = 0,
                 error = e.message
             )
+        }
+    }
+
+    /**
+     * Returns RMS, spectral centroid, bandwidth, rolloff, zero-crossing rate, and
+     * 20 MFCC means in the bundled KNN's expected feature order. These raw features
+     * are experimental because the model's fitted StandardScaler is unavailable.
+     */
+    fun generateKnnFeatures(audioData: ShortArray, sampleRate: Int, channelCount: Int): KnnFeatureResult {
+        if (audioData.isEmpty()) return KnnFeatureResult(floatArrayOf(), "Audio data is empty")
+        if (sampleRate != 16000) return KnnFeatureResult(floatArrayOf(), "Only 16000Hz audio is supported")
+        if (channelCount !in 1..2 || audioData.size % channelCount != 0) {
+            return KnnFeatureResult(floatArrayOf(), "Audio channel layout is invalid")
+        }
+
+        val mono = FloatArray(audioData.size / channelCount) { frame ->
+            var sum = 0f
+            for (channel in 0 until channelCount) {
+                sum += audioData[frame * channelCount + channel].toFloat() / Short.MAX_VALUE
+            }
+            sum / channelCount
+        }
+        val waveform = FloatArray(sampleRate * 6) { i -> if (i < mono.size) mono[i] else 0f }
+        val stft = computeSTFT(waveform)
+        val mfcc = applyDCT(convertToDb(applyMelFilterBank(stft)), NUM_FEATURE_BINS)
+        val values = FloatArray(25)
+        var rms = 0.0
+        var centroid = 0.0
+        var bandwidth = 0.0
+        var rolloff = 0.0
+        var zeroCrossing = 0.0
+
+        for (frame in stft.indices) {
+            val start = frame * HOP_LENGTH
+            val end = minOf(start + FFT_SIZE, waveform.size)
+            var squareSum = 0.0
+            var crossings = 0
+            for (i in start until end) {
+                val sample = waveform[i].toDouble()
+                squareSum += sample * sample
+                if (i > start && (waveform[i] >= 0f) != (waveform[i - 1] >= 0f)) crossings++
+            }
+            val frameLength = (end - start).coerceAtLeast(1)
+            rms += sqrt(squareSum / frameLength)
+            zeroCrossing += crossings.toDouble() / (frameLength - 1).coerceAtLeast(1)
+
+            var energySum = 0.0
+            var weightedFrequency = 0.0
+            for (bin in stft[frame].indices) {
+                val magnitude = stft[frame][bin].toDouble()
+                val energy = magnitude * magnitude
+                energySum += energy
+                weightedFrequency += bin.toDouble() * sampleRate / FFT_SIZE * energy
+            }
+            val frameCentroid = if (energySum > 0.0) weightedFrequency / energySum else 0.0
+            centroid += frameCentroid
+            var variance = 0.0
+            var cumulativeEnergy = 0.0
+            var frameRolloff = 0.0
+            for (bin in stft[frame].indices) {
+                val magnitude = stft[frame][bin].toDouble()
+                val energy = magnitude * magnitude
+                val frequency = bin.toDouble() * sampleRate / FFT_SIZE
+                val difference = frequency - frameCentroid
+                variance += difference * difference * energy
+                cumulativeEnergy += energy
+                if (frameRolloff == 0.0 && cumulativeEnergy >= energySum * 0.85) frameRolloff = frequency
+            }
+            bandwidth += if (energySum > 0.0) sqrt(variance / energySum) else 0.0
+            rolloff += frameRolloff
+        }
+
+        val frameCount = stft.size.coerceAtLeast(1)
+        values[0] = (rms / frameCount).toFloat()
+        values[1] = (centroid / frameCount).toFloat()
+        values[2] = (bandwidth / frameCount).toFloat()
+        values[3] = (rolloff / frameCount).toFloat()
+        values[4] = (zeroCrossing / frameCount).toFloat()
+        for (i in 0 until 20) values[5 + i] = mfcc[i].average().toFloat()
+
+        return if (values.all(Float::isFinite)) {
+            KnnFeatureResult(values)
+        } else {
+            KnnFeatureResult(floatArrayOf(), "Feature extraction produced non-finite values")
         }
     }
 
