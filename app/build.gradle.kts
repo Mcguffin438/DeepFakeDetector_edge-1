@@ -43,7 +43,7 @@ android {
         noCompress += setOf("pt", "ptl", "so", "onnx")  // Keep PyTorch and ONNX files uncompressed
     }
 
-    // PyTorch packaging config
+    // Native runtime packaging config
     packaging {
         jniLibs.useLegacyPackaging = false
         jniLibs.pickFirsts += "lib/*/libc++_shared.so"
@@ -96,9 +96,6 @@ dependencies {
     implementation(libs.kotlindl.onnx) {
         exclude(group = "com.microsoft.onnxruntime", module = "onnxruntime-android")
     }
-
-    // ExecuTorch Support
-    implementation(libs.executorch)
 
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

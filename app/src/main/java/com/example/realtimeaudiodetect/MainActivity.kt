@@ -23,7 +23,6 @@ import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButton
@@ -35,6 +34,9 @@ import timber.log.Timber
 import androidx.core.content.edit
 import androidx.core.net.toUri
 import java.io.BufferedInputStream
+import java.io.IOException
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 class MainActivity : AppCompatActivity(), ServiceConnection {
     
@@ -79,7 +81,13 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     // Service state
     private var deepfakeService: RealTimeAudioDetectionService? = null
     private var isServiceBound = false
+    private var isBindingToService = false
     private var selectedAudioUri: Uri? = null
+
+    private data class AudioFileData(
+        val samples: ShortArray,
+        val sampleRate: Int
+    )
     
     // Animation state
     private var pulseAnimator: AnimatorSet? = null
@@ -106,7 +114,6 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
     
-    @RequiresApi(Build.VERSION_CODES.O)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
@@ -132,9 +139,10 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     override fun onDestroy() {
         super.onDestroy()
         stopPulseAnimation()
-        if (isServiceBound) {
+        if (isServiceBound || isBindingToService) {
             unbindService(this)
             isServiceBound = false
+            isBindingToService = false
         }
     }
     
@@ -163,7 +171,6 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         switchAutoStart.isChecked = prefs.getBoolean("auto_start", false)
     }
     
-    @RequiresApi(Build.VERSION_CODES.O)
     private fun setupClickListeners() {
         btnToggleService.setOnClickListener {
             toggleService()
@@ -315,11 +322,9 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     }
     
     private fun isServiceRunning(): Boolean {
-        // Reliable state tracking via service binding and reference instead of deprecated getRunningServices()
-        return isServiceBound && deepfakeService != null
+        return RealTimeAudioDetectionService.isActive
     }
     
-    @RequiresApi(Build.VERSION_CODES.O)
     private fun toggleService() {
         if (isServiceRunning()) {
             stopMonitoringService()
@@ -328,7 +333,6 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
     
-    @RequiresApi(Build.VERSION_CODES.O)
     private fun startMonitoringService() {
         if (!hasAllPermissions()) {
             requestPermissions()
@@ -340,7 +344,8 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
         
         try {
-            startForegroundService(intent)
+            ContextCompat.startForegroundService(this, intent)
+            bindToService()
             
             // Visual feedback for starting
             tvMainStatusLabel.text = "Starting..."
@@ -360,27 +365,44 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     }
     
     private fun stopMonitoringService() {
-        val intent = Intent(this, RealTimeAudioDetectionService::class.java)
-        stopService(intent)
+        val intent = Intent(this, RealTimeAudioDetectionService::class.java).apply {
+            action = RealTimeAudioDetectionService.ACTION_STOP_DETECTION
+        }
+        startService(intent)
         
-        if (isServiceBound) {
+        if (isServiceBound || isBindingToService) {
             unbindService(this)
             isServiceBound = false
+            isBindingToService = false
             deepfakeService = null
         }
-        
-        updateServiceStatus()
+
+        lifecycleScope.launch {
+            kotlinx.coroutines.delay(100)
+            updateServiceStatus()
+        }
     }
     
     private fun bindToService() {
+        if (isServiceBound || isBindingToService) return
         val intent = Intent(this, RealTimeAudioDetectionService::class.java)
-        bindService(intent, this, BIND_AUTO_CREATE)
+        isBindingToService = bindService(intent, this, BIND_AUTO_CREATE)
+        if (!isBindingToService) {
+            Timber.e("Failed to bind to detection service")
+        }
     }
-    
+
     override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
-        val binder = service as RealTimeAudioDetectionService.LocalBinder
+        val binder = service as? RealTimeAudioDetectionService.LocalBinder
+        if (binder == null) {
+            unbindService(this)
+            isBindingToService = false
+            Timber.e("Unexpected binder connected to detection service")
+            return
+        }
         deepfakeService = binder.getService()
         isServiceBound = true
+        isBindingToService = false
         updateServiceStatus()
         Timber.d("Service connected")
     }
@@ -422,7 +444,6 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         viewShieldPulse.visibility = View.INVISIBLE
     }
 
-    @RequiresApi(Build.VERSION_CODES.O)
     fun analyzeRawAudio(
         audioData: ShortArray,
         sampleRate: Int = 16000,
@@ -430,27 +451,56 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         callback: (RealTimeAudioDetectionService.AudioAnalysisResult) -> Unit
     ) {
         lifecycleScope.launch {
-            if (!isServiceRunning()) {
+            if (!hasAllPermissions()) {
+                callback(audioAnalysisError("Required permissions have not been granted"))
+                return@launch
+            }
+
+            if (deepfakeService == null) {
                 startMonitoringService()
-                var attempts = 0
-                while (!isServiceBound && attempts < 50) {
-                    kotlinx.coroutines.delay(100)
-                    attempts++
-                }
             }
-            
-            if (isServiceBound && deepfakeService != null) {
-                var modelAttempts = 0
-                while (!deepfakeService!!.isReadyForAnalysis() && modelAttempts < 100) {
-                    kotlinx.coroutines.delay(100)
-                    modelAttempts++
-                }
-                
-                val result = deepfakeService!!.analyzeRawAudio(audioData, sampleRate, audioLengthMs)
-                callback(result)
+
+            if (!waitUntil(timeoutMs = 5_000L) { deepfakeService != null }) {
+                callback(audioAnalysisError("Could not connect to the detection service"))
+                return@launch
             }
+
+            val service = deepfakeService
+            if (service == null) {
+                callback(audioAnalysisError("Detection service disconnected before analysis"))
+                return@launch
+            }
+
+            if (!waitUntil(timeoutMs = 10_000L) {
+                    deepfakeService === service && service.isReadyForAnalysis()
+                }) {
+                callback(audioAnalysisError("Detection model did not become ready"))
+                return@launch
+            }
+
+            callback(service.analyzeRawAudio(audioData, sampleRate, audioLengthMs))
         }
     }
+
+    private suspend fun waitUntil(timeoutMs: Long, condition: () -> Boolean): Boolean {
+        val deadline = android.os.SystemClock.elapsedRealtime() + timeoutMs
+        while (android.os.SystemClock.elapsedRealtime() < deadline) {
+            if (condition()) return true
+            kotlinx.coroutines.delay(100)
+        }
+        return condition()
+    }
+
+    private fun audioAnalysisError(message: String) =
+        RealTimeAudioDetectionService.AudioAnalysisResult(
+            isFake = false,
+            confidence = 0f,
+            fakeConfidence = 0f,
+            realConfidence = 1f,
+            processingTimeMs = 0L,
+            audioLengthMs = -1L,
+            error = message
+        )
     
     private fun selectAudioFile() {
         try {
@@ -472,8 +522,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         return try {
             contentResolver.query(uri, null, null, null, null)?.use { cursor ->
                 val nameIndex = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                cursor.moveToFirst()
-                cursor.getString(nameIndex)
+                if (nameIndex >= 0 && cursor.moveToFirst()) cursor.getString(nameIndex) else null
             } ?: "Unknown file"
         } catch (e: Exception) {
             Timber.e(e, "Error getting file name")
@@ -481,7 +530,6 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
     
-    @RequiresApi(Build.VERSION_CODES.O)
     private fun analyzeSelectedAudioFile() {
         selectedAudioUri?.let { uri ->
             lifecycleScope.launch {
@@ -489,9 +537,9 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
                     btnAnalyzeFile.isEnabled = false
                     progressBar.visibility = View.VISIBLE
                     
-                    val audioData = readAudioFile(uri)
-                    if (audioData != null) {
-                        analyzeRawAudio(audioData) { result ->
+                    val audioFile = readAudioFile(uri)
+                    if (audioFile != null) {
+                        analyzeRawAudio(audioFile.samples, audioFile.sampleRate) { result ->
                             lifecycleScope.launch {
                                 displayAnalysisResult(result)
                                 btnAnalyzeFile.isEnabled = true
@@ -499,7 +547,6 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
                             }
                         }
                     } else {
-                        Toast.makeText(this@MainActivity, "Failed to read audio file", Toast.LENGTH_SHORT).show()
                         btnAnalyzeFile.isEnabled = true
                         progressBar.visibility = View.GONE
                     }
@@ -513,29 +560,93 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
     
-    private suspend fun readAudioFile(uri: Uri): ShortArray? {
+    private suspend fun readAudioFile(uri: Uri): AudioFileData? {
         return withContext(Dispatchers.IO) {
             try {
                 contentResolver.openInputStream(uri)?.use { inputStream ->
                     val bufferedStream = BufferedInputStream(inputStream)
-                    val bytes = bufferedStream.readBytes()
-                    val dataStartIndex = if (bytes.size > 44 && 
-                        bytes.sliceArray(0..3).contentEquals("RIFF".toByteArray())) 44 else 0
-                    
-                    val audioBytes = bytes.sliceArray(dataStartIndex until bytes.size)
-                    val samples = ShortArray(audioBytes.size / 2)
-                    for (i in samples.indices) {
-                        val low = audioBytes[i * 2].toInt() and 0xFF
-                        val high = audioBytes[i * 2 + 1].toInt() and 0xFF
-                        samples[i] = ((high shl 8) or low).toShort()
-                    }
-                    samples
-                }
+                    parsePcm16Wav(bufferedStream.readBytes())
+                } ?: throw IOException("Unable to open selected audio file")
             } catch (e: Exception) {
                 Timber.e(e, "Error reading audio file")
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Unsupported or invalid WAV file: ${e.message}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
                 null
             }
         }
+    }
+
+    private fun parsePcm16Wav(bytes: ByteArray): AudioFileData {
+        if (bytes.size < 12 ||
+            !bytes.copyOfRange(0, 4).contentEquals("RIFF".toByteArray(Charsets.US_ASCII)) ||
+            !bytes.copyOfRange(8, 12).contentEquals("WAVE".toByteArray(Charsets.US_ASCII))
+        ) {
+            throw IOException("Expected a RIFF/WAVE audio file")
+        }
+
+        val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        var offset = 12
+        var format: Int? = null
+        var channels: Int? = null
+        var sampleRate: Int? = null
+        var bitsPerSample: Int? = null
+        var dataOffset: Int? = null
+        var dataSize: Int? = null
+
+        while (offset <= bytes.size - 8) {
+            val chunkSize = buffer.getInt(offset + 4).toLong() and 0xFFFF_FFFFL
+            val chunkStart = offset + 8
+            if (chunkSize > bytes.size - chunkStart) {
+                throw IOException("WAV chunk extends beyond end of file")
+            }
+            val chunkLength = chunkSize.toInt()
+            val chunkEnd = chunkStart + chunkLength
+
+            when {
+                bytes.copyOfRange(offset, offset + 4)
+                    .contentEquals("fmt ".toByteArray(Charsets.US_ASCII)) -> {
+                    if (chunkLength < 16) throw IOException("Invalid WAV format chunk")
+                    format = buffer.getShort(chunkStart).toInt() and 0xFFFF
+                    channels = buffer.getShort(chunkStart + 2).toInt() and 0xFFFF
+                    sampleRate = buffer.getInt(chunkStart + 4)
+                    bitsPerSample = buffer.getShort(chunkStart + 14).toInt() and 0xFFFF
+                }
+                bytes.copyOfRange(offset, offset + 4)
+                    .contentEquals("data".toByteArray(Charsets.US_ASCII)) -> {
+                    dataOffset = chunkStart
+                    dataSize = chunkLength
+                }
+            }
+
+            offset = chunkEnd + (chunkLength and 1)
+        }
+
+        val channelCount = channels ?: throw IOException("WAV format chunk is missing")
+        val rate = sampleRate ?: throw IOException("WAV sample rate is missing")
+        if (format != 1 || bitsPerSample != 16 || channelCount !in 1..2) {
+            throw IOException("Only 16-bit PCM mono or stereo WAV files are supported")
+        }
+        if (rate <= 0) throw IOException("Invalid WAV sample rate")
+
+        val start = dataOffset ?: throw IOException("WAV data chunk is missing")
+        val size = dataSize ?: throw IOException("WAV data chunk is missing")
+        val blockAlign = channelCount * 2
+        if (size == 0 || size % blockAlign != 0) {
+            throw IOException("WAV audio data is empty or incomplete")
+        }
+
+        val frameCount = size / blockAlign
+        val samples = if (channelCount == 1) {
+            ShortArray(frameCount * 2) { index -> buffer.getShort(start + (index / 2) * 2) }
+        } else {
+            ShortArray(frameCount * channelCount) { index -> buffer.getShort(start + index * 2) }
+        }
+        return AudioFileData(samples, rate)
     }
     
     private fun displayAnalysisResult(result: RealTimeAudioDetectionService.AudioAnalysisResult) {
@@ -581,12 +692,10 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         lifecycleScope.launch {
             progressBar.visibility = View.VISIBLE
             val dummyData = ShortArray(16000) { (it % 100).toShort() }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                analyzeRawAudio(dummyData) { result ->
-                    lifecycleScope.launch {
-                        progressBar.visibility = View.GONE
-                        displayAnalysisResult(result)
-                    }
+            analyzeRawAudio(dummyData) { result ->
+                lifecycleScope.launch {
+                    progressBar.visibility = View.GONE
+                    displayAnalysisResult(result)
                 }
             }
         }

@@ -46,6 +46,10 @@ class RealTimeAudioDetectionService : Service() {
         
         private const val AUDIO_CHUNK_DURATION_MS = 6000   // 6s chunks
         private const val OVERLAP_DURATION_MS = 500        // 0.5s overlap
+
+        @Volatile
+        var isActive = false
+            private set
     }
     
     private val binder = LocalBinder()
@@ -119,9 +123,18 @@ class RealTimeAudioDetectionService : Service() {
         val action = intent?.action ?: return START_NOT_STICKY
         
         when (action) {
-            ACTION_PREPARE -> handlePrepare(intent)
-            ACTION_START_DETECTION -> handleStartDetection(intent)
-            ACTION_STOP_DETECTION -> handleStopDetection()
+            ACTION_PREPARE -> {
+                isActive = true
+                handlePrepare(intent)
+            }
+            ACTION_START_DETECTION -> {
+                isActive = true
+                handleStartDetection(intent)
+            }
+            ACTION_STOP_DETECTION -> {
+                isActive = false
+                handleStopDetection()
+            }
         }
         
         return START_STICKY
@@ -597,6 +610,7 @@ class RealTimeAudioDetectionService : Service() {
     
     override fun onDestroy() {
         super.onDestroy()
+        isActive = false
         stopAudioMonitoring()
         hideOverlay()
         try {
