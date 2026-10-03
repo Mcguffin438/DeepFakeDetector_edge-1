@@ -208,7 +208,7 @@ class AudioProcessor {
     /**
      * Returns RMS, spectral centroid, bandwidth, rolloff, zero-crossing rate, and
      * 20 MFCC means in the bundled KNN's expected feature order. These raw features
-     * are experimental because the model's fitted StandardScaler is unavailable.
+     * are experimental because the model's training feature extractor may differ.
      */
     fun generateKnnFeatures(audioData: ShortArray, sampleRate: Int, channelCount: Int): KnnFeatureResult {
         if (audioData.isEmpty()) return KnnFeatureResult(floatArrayOf(), "Audio data is empty")

@@ -140,6 +140,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     override fun onDestroy() {
         super.onDestroy()
         stopPulseAnimation()
+        deepfakeService?.setDetectionResultListener(null)
         if (isServiceBound || isBindingToService) {
             unbindService(this)
             isServiceBound = false
@@ -402,6 +403,9 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
             return
         }
         deepfakeService = binder.getService()
+        binder.setDetectionResultListener(
+            RealTimeAudioDetectionService.DetectionResultListener(::displayLiveDetectionResult)
+        )
         isServiceBound = true
         isBindingToService = false
         updateServiceStatus()
@@ -409,9 +413,25 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     }
     
     override fun onServiceDisconnected(name: ComponentName?) {
+        deepfakeService?.setDetectionResultListener(null)
         deepfakeService = null
         isServiceBound = false
         Timber.d("Service disconnected")
+    }
+
+    private fun displayLiveDetectionResult(result: RealTimeAudioDetectionService.DetectionResult) {
+        val fakePercent = (result.confidence * 100).toInt()
+        val realPercent = ((1f - result.confidence) * 100).toInt()
+        layoutAnalysisResults.visibility = View.VISIBLE
+        tvAnalysisResult.text = if (result.isFake) "LIVE CALL: POSSIBLE DEEPFAKE" else "LIVE CALL: LIKELY REAL"
+        tvAnalysisResult.setTextColor(
+            ContextCompat.getColor(
+                this,
+                if (result.isFake) R.color.error_color else R.color.success_color
+            )
+        )
+        tvConfidenceScores.text =
+            "Fake probability: $fakePercent% | Real probability: $realPercent%\n${result.warning.orEmpty()}"
     }
     
     private fun startPulseAnimation(colorRes: Int) {
@@ -669,7 +689,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
             val fakePercent = (result.fakeConfidence * 100).toInt()
             val realPercent = (result.realConfidence * 100).toInt()
             val warning = result.warning?.let { "\n$it" }.orEmpty()
-            tvConfidenceScores.text = "Real: $realPercent% | Fake: $fakePercent%$warning"
+            tvConfidenceScores.text = "Fake probability: $fakePercent% | Real probability: $realPercent%$warning"
         }
     }
     

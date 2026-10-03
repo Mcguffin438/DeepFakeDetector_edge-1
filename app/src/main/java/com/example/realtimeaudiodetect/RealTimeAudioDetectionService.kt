@@ -53,7 +53,8 @@ class RealTimeAudioDetectionService : Service() {
         private const val AUDIO_CHUNK_DURATION_MS = 6000   // 6s chunks
         private const val OVERLAP_DURATION_MS = 500        // 0.5s overlap
         private const val KNN_FEATURE_COUNT = 25
-        const val MODEL_WARNING = "Experimental result: KNN StandardScaler parameters are missing."
+        const val MODEL_WARNING =
+            "Experimental result: Android feature extraction may differ from KNN training."
 
         @Volatile
         var isActive = false
@@ -93,6 +94,12 @@ class RealTimeAudioDetectionService : Service() {
     
     // Results tracking
     private val detectionResults = java.util.Collections.synchronizedList(mutableListOf<DetectionResult>())
+    @Volatile
+    private var detectionResultListener: DetectionResultListener? = null
+
+    fun setDetectionResultListener(listener: DetectionResultListener?) {
+        detectionResultListener = listener
+    }
     
     // UI overlay
     private var overlayView: OverlayView? = null
@@ -100,8 +107,15 @@ class RealTimeAudioDetectionService : Service() {
     
     inner class LocalBinder : Binder() {
         fun getService(): RealTimeAudioDetectionService = this@RealTimeAudioDetectionService
+        fun setDetectionResultListener(listener: DetectionResultListener?) {
+            this@RealTimeAudioDetectionService.setDetectionResultListener(listener)
+        }
     }
-    
+
+    fun interface DetectionResultListener {
+        fun onDetectionResult(result: DetectionResult)
+    }
+
     data class DetectionResult(
         val timestamp: Long,
         val isFake: Boolean,
@@ -146,6 +160,7 @@ class RealTimeAudioDetectionService : Service() {
             }
             ACTION_STOP_DETECTION -> {
                 isActive = false
+                detectionResultListener = null
                 handleStopDetection()
             }
             else -> {
@@ -558,41 +573,45 @@ class RealTimeAudioDetectionService : Service() {
     }
 
     private fun extractFakeProbability(results: OrtSession.Result): Float {
-        for (index in 0 until results.size()) {
-            val value = results[index].value
-            val probability = when (value) {
-                is List<*> -> {
-                    val probabilities = value.firstOrNull() as? Map<*, *>
-                    (probabilities?.get(1L) as? Number)?.toFloat()
-                        ?: (probabilities?.get(1) as? Number)?.toFloat()
-                        ?: (probabilities?.get("1") as? Number)?.toFloat()
-                }
-                is OnnxTensor -> if ((value.getInfo() as? TensorInfo)?.type == ai.onnxruntime.OnnxJavaType.FLOAT) {
-                    val tensorValues = value.floatBuffer.let { buffer ->
-                        FloatArray(buffer.remaining()).also(buffer::get)
-                    }
-                    when (tensorValues.size) {
-                        1 -> tensorValues[0]
-                        2 -> tensorValues[1]
-                        else -> null
-                    }
-                } else null
-                is FloatArray -> when (value.size) {
-                    1 -> value[0]
-                    2 -> value[1]
-                    else -> null
-                }
-                is Number -> value.toFloat()
-                else -> null
+        val probabilityOutput = results.get("probabilities").orElse(null)
+            ?: results.get("output_probability").orElseThrow {
+                IllegalStateException("Model probability output is missing")
             }
-            if (probability != null) {
-                require(probability.isFinite() && probability in 0f..1f) {
-                    "Model returned invalid fake probability: $probability"
-                }
-                return probability
+        val probability = when (val value = probabilityOutput.value) {
+            is List<*> -> {
+                val classProbabilities = value.firstOrNull() as? Map<*, *>
+                    ?: throw IllegalStateException("Probability output has an unsupported map format")
+                (classProbabilities[1L] as? Number)?.toFloat()
+                    ?: (classProbabilities[1] as? Number)?.toFloat()
+                    ?: (classProbabilities["1"] as? Number)?.toFloat()
+                    ?: throw IllegalStateException("Probability output has no deepfake class (label 1)")
             }
+            is Map<*, *> -> {
+                (value[1L] as? Number)?.toFloat()
+                    ?: (value[1] as? Number)?.toFloat()
+                    ?: (value["1"] as? Number)?.toFloat()
+                    ?: throw IllegalStateException("Probability output has no deepfake class (label 1)")
+            }
+            is OnnxTensor -> {
+                val tensorInfo = probabilityOutput.info as? TensorInfo
+                    ?: throw IllegalStateException("Probability output is not a tensor")
+                require(tensorInfo.type == ai.onnxruntime.OnnxJavaType.FLOAT) {
+                    "Probability output tensor is not float"
+                }
+                val buffer = value.floatBuffer
+                val values = FloatArray(buffer.remaining()).also(buffer::get)
+                when (values.size) {
+                    1 -> values[0]
+                    2 -> values[1]
+                    else -> throw IllegalStateException("Probability output has ${values.size} values")
+                }
+            }
+            else -> throw IllegalStateException("Probability output has unsupported type ${value::class.java.name}")
         }
-        throw IllegalStateException("Model outputs did not contain a supported fake probability")
+        require(probability.isFinite() && probability in 0f..1f) {
+            "Model returned invalid fake probability: $probability"
+        }
+        return probability
     }
 
     private suspend fun processAudioChunk(audioData: ShortArray, chunkId: Int) {
@@ -790,6 +809,7 @@ class RealTimeAudioDetectionService : Service() {
     
     private fun updateOverlay(result: DetectionResult) {
         overlayView?.updateDetectionResult(result)
+        detectionResultListener?.onDetectionResult(result)
     }
     
     private fun generateCallSummary() {

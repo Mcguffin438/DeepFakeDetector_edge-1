@@ -70,7 +70,7 @@ class OverlayView @JvmOverloads constructor(
     private var pulseScale = 1f
     private val cornerRadius = 24f
     private val padding = 32f
-    private val chartHeight = 120f
+    private val chartHeight = 90f
     
     init {
         // Setup initial state
@@ -99,7 +99,7 @@ class OverlayView @JvmOverloads constructor(
     
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = 400
-        val height = 300
+        val height = 360
         setMeasuredDimension(width, height)
     }
     
@@ -114,8 +114,21 @@ class OverlayView @JvmOverloads constructor(
         
         // Content layers
         drawMainStatus(canvas, width, height)
+        drawProbabilityScores(canvas, width)
         drawConfidenceChart(canvas, width, height)
         drawDetailInfo(canvas, width, height)
+    }
+
+    private fun drawProbabilityScores(canvas: Canvas, width: Float) {
+        val result = currentResult ?: return
+        val centerX = width / 2f
+        val fakePercent = (result.confidence * 100).toInt()
+        val realPercent = ((1f - result.confidence) * 100).toInt()
+        detailPaint.textSize = 25f
+        detailPaint.color = Color.WHITE
+        canvas.drawText("Fake probability: $fakePercent%", centerX, 142f, detailPaint)
+        canvas.drawText("Real probability: $realPercent%", centerX, 174f, detailPaint)
+        detailPaint.textSize = 32f
     }
     
     private fun drawMainStatus(canvas: Canvas, width: Float, height: Float) {
@@ -190,14 +203,15 @@ class OverlayView @JvmOverloads constructor(
         val detailText = when {
             currentResult == null -> "Waiting for audio data..."
             else -> {
-                val confidence = (currentResult!!.confidence * 100).toInt()
                 val samples = detectionHistory.size
-                "Unscaled KNN: $confidence% • Samples: $samples"
+                "Experimental KNN • Samples: $samples"
             }
         }
-        
+
         detailPaint.color = Color.argb(200, 255, 255, 255)
+        detailPaint.textSize = 23f
         canvas.drawText(detailText, centerX, detailY, detailPaint)
+        detailPaint.textSize = 32f
     }
     
     private fun startPulseAnimation() {
