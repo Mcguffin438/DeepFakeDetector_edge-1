@@ -56,13 +56,12 @@ This project implements a complete pipeline for edge-deployed deepfake detection
 - The bundled KNN is trained on one-second clips from Gary Stafford's CC BY 4.0 dataset, with RobustScaler embedded in the ONNX graph
 - Nested, source-grouped five-fold evaluation on that dataset: 81.94% accuracy and 85.85% fake recall; this is not a live-call benchmark
 - Evaluation groups keep clips from the same source recording/voice together, but do not hold out entire synthetic generator platforms
-- The current exploratory LightGBM was trained with Android-matched features from 21 of the 30 bundled Gary Stafford, Amazon Polly, and ElevenLabs clips; the other nine (three per source category) were held out from fitting
-- On those nine held-out clips, the current model classified 8/9 correctly (88.9%) in the Android app on an x86_64 emulator using NNAPI: Gary Stafford real 3/3, Amazon Polly fake 3/3, ElevenLabs fake 2/3. Balanced accuracy was 91.7%. The model was promoted based on this same holdout, so this is an exploratory screening score, not an independent final test
-- On the same nine holdout clips, the previous York-trained model classified 5/9 correctly in the Android app (55.6%); it flagged all three real clips as fake. The exploratory model therefore improved this fixed small holdout, but the score is highly uncertain and does not estimate performance on new recordings
-- This small exploratory model replaces the earlier York-trained LightGBM. The earlier model scored 97.58% on a random 30% holdout (3,063 rows) of the York feature CSV, versus 62.68% for its previous ONNX model on the same split; those results do not apply to the current model and were not a source-independent or one-second/live-call benchmark
-- The 30 bundled samples are insufficient for reliable cross-source training or evaluation. Do not treat the nine-clip result as production accuracy; use a larger source-disjoint collection for meaningful tuning and testing
-- On the bundled `demo_fake.wav` reference-fake clip, app-style feature extraction followed by `lgbmv2.onnx` predicted REAL: 17.91% fake / 82.09% real for the full 3.934-second clip, and 0.14% fake / 99.86% real for its first one-second chunk. This is an offline ONNX test using a port of the Android feature pipeline; it demonstrates a false negative, not device validation
-- The app's **Test Fake Sample** flow was also run on a Pixel API 35 x86_64 emulator with the bundled models loaded: KNN showed 100% fake, LightGBM showed 17% fake / 83% real, and the app reported model disagreement. This single full-clip demo test is not an accuracy metric or a real-device benchmark
+- The bundled `lgbmv2.onnx` was retrained using Android-matched features from 300 CC BY 4.0 clips: 100 Gary Stafford real, 100 Amazon Polly synthetic, and 100 ElevenLabs synthetic
+- The training split keeps source recordings/voice IDs grouped: 239 clips for training and 61 source-grouped clips held out for evaluation. The selected LightGBM achieved 63.93% accuracy and 61.19% balanced accuracy on that holdout, compared with 22.95% and 23.16% for the previous model using the same feature port/split
+- Held-out per-category accuracy was 11/21 (52.38%) Gary Stafford real, 13/14 (92.86%) Amazon Polly synthetic, and 15/26 (57.69%) ElevenLabs synthetic. This indicates limited generalization, particularly to unseen ElevenLabs voices and Gary recordings; it is not a production or live-call accuracy claim
+- The holdout comparison is also used as a promotion gate, so it is not an untouched final test. After evaluation, the exported model is refit on all 300 clips; the 61-clip scores describe the pre-refit candidate, not an independent test of the final all-data artifact
+- Training clips span 14 Gary Stafford recordings, 30 Polly voice IDs, and 28 ElevenLabs voice IDs. The samples are full 2.5–13 second dataset segments; the app feature extractor uses up to six seconds, not one-second windows
+- One-second live predictions have not been validated on phone hardware; Android call capture and acoustics may reduce reliability
 - One-second live predictions have not been validated on phone hardware; Android call capture and acoustics may reduce reliability
 
 **Architecture Highlights:**
@@ -186,13 +185,21 @@ python notebooks/DeepFakeDetector/train_lgbm_york.py
 
 This tunes LightGBM with five-fold stratified cross-validation on the training portion of `audio_features_stringremoved.csv`, compares it to the bundled ONNX model on the fixed 30% random holdout, and replaces `lgbmv2.onnx` only if holdout accuracy improves. The source CSV lacks source IDs and audio-duration metadata, so its holdout score must not be interpreted as one-second or live-call accuracy.
 
-For a limited experiment on the bundled Gary Stafford, Amazon Polly, and ElevenLabs WAVs, run:
+The app includes 100 clips per source category (300 total). To refresh/recreate the attributed bundle from the pinned dataset revision, run:
+
+```bash
+python notebooks/DeepFakeDetector/prepare_bundled_audio_dataset.py
+```
+
+The script downloads from the pinned dataset revision, converts to mono 16 kHz PCM16 WAV, preserves existing samples, and records each original FLAC path in `dataset/MANIFEST.csv`.
+
+To train and export the LightGBM model on the expanded sample set, run:
 
 ```bash
 python notebooks/DeepFakeDetector/train_lgbm_bundled_audio.py
 ```
 
-This ports the app's 26 input features, selects model settings using cross-validation on a training split, and reserves three clips from each category for holdout evaluation. It exports only if held-out balanced accuracy beats the current model. With just 30 clips, results are exploratory; the exported model is fit on the 21 training clips, not the held-out clips. Because the holdout is also used to decide whether to promote the candidate, it is not an untouched final test. The bundled WAVs are analyzed as full clips (up to six seconds), not as one-second windows.
+This ports the app's 26 input features, uses source-grouped cross-validation for parameter selection, and evaluates on a source-grouped holdout before refitting the final ONNX model on all 300 clips. The bundled files are 2.5–13 second segments, analyzed as full clips (up to six seconds), not one-second windows. The dataset is small and source-limited; holdout metrics are exploratory and should not be treated as real-world accuracy.
 
 ### Adding New Features
 1. Keep feature extraction in `AudioProcessor.kt` aligned with each model’s training feature order and scaling.

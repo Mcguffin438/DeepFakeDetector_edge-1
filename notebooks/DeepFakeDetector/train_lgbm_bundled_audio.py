@@ -1,13 +1,13 @@
-"""Exploratory LightGBM retraining on the 30 bundled Android audio samples.
+"""LightGBM retraining on the bundled Android audio samples.
 
-The split is stratified by source category so each provider has separate
-training and held-out clips. The held-out clips are never used to fit the
-exported model. Results are exploratory only because there are just ten clips
-per source category.
+The source-grouped holdout keeps clips from the same original recording or
+synthetic voice out of both training and evaluation. Final export is refit on
+all clips after the held-out evaluation is recorded.
 """
 
 import argparse
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -15,12 +15,11 @@ import lightgbm as lgb
 import numpy as np
 import onnx
 import onnxruntime as ort
-import pandas as pd
 import soundfile as sf
 from onnxmltools import convert_lightgbm
 from onnxmltools.convert.common.data_types import FloatTensorType
 from sklearn.metrics import accuracy_score, balanced_accuracy_score, confusion_matrix
-from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.model_selection import StratifiedGroupKFold
 
 
 SAMPLE_RATE = 16_000
@@ -35,6 +34,7 @@ CATEGORIES = {
     "amazon_polly_fake": 0,
     "elevenlabs_fake": 0,
 }
+TARGET_PER_CATEGORY = 100
 
 
 def mel_filter_bank() -> np.ndarray:
@@ -158,6 +158,13 @@ def onnx_fake_probabilities(path: Path, features: np.ndarray) -> np.ndarray:
     raise ValueError("Could not find a two-class probability output in the ONNX model")
 
 
+def source_group(source_path: str) -> str:
+    match = re.search(r"(yt_\d{4}|(?:po|el)_\d{4})", source_path)
+    if not match:
+        raise ValueError(f"Cannot determine source recording group from {source_path}")
+    return match.group(1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -177,23 +184,35 @@ def main() -> None:
     rows = []
     for category, label in CATEGORIES.items():
         for path in sorted((args.samples / category).glob("*.wav")):
-            rows.append((path, category, label, extract_android_features(path, bank)))
-    if len(rows) != 30:
-        raise ValueError(f"Expected 30 bundled WAVs, found {len(rows)}")
+            rows.append(
+                (
+                    path,
+                    category,
+                    label,
+                    extract_android_features(path, bank),
+                    source_group(path.stem),
+                )
+            )
+    category_counts = {category: sum(row[1] == category for row in rows) for category in CATEGORIES}
+    if any(count != TARGET_PER_CATEGORY for count in category_counts.values()):
+        raise ValueError(
+            f"Expected {TARGET_PER_CATEGORY} WAVs per category; found {category_counts}"
+        )
 
     features = np.stack([row[3] for row in rows]).astype(np.float32)
     labels = np.array([row[2] for row in rows], dtype=np.int64)
     categories = np.array([row[1] for row in rows])
+    groups = np.array([row[4] for row in rows])
     if not np.isfinite(features).all():
         raise ValueError("Feature extraction produced non-finite values")
 
     indexes = np.arange(len(rows))
-    train_indexes, test_indexes = train_test_split(
-        indexes,
-        test_size=0.30,
-        random_state=args.seed,
-        stratify=categories,
+    holdout_split = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=args.seed)
+    train_indexes, test_indexes = next(
+        holdout_split.split(features, labels, groups=groups)
     )
+    if set(groups[train_indexes]) & set(groups[test_indexes]):
+        raise RuntimeError("Source groups leaked across the training and holdout split")
     x_train, y_train = features[train_indexes], labels[train_indexes]
     x_test, y_test = features[test_indexes], labels[test_indexes]
     test_categories = categories[test_indexes]
@@ -203,6 +222,7 @@ def main() -> None:
         f"train={len(train_indexes)}, held-out={len(test_indexes)}; "
         f"input width={features.shape[1]}"
     )
+    print(f"Per-category counts: {category_counts}")
     print("Held-out clips (kept out of model fitting):")
     for index in test_indexes:
         print(f"  {rows[index][1]}/{rows[index][0].name}")
@@ -219,11 +239,15 @@ def main() -> None:
         for trees in (25, 60, 120)
         for leaves, depth, child in ((3, 3, 1), (5, 3, 2), (7, -1, 3))
     ]
-    folds = StratifiedKFold(n_splits=3, shuffle=True, random_state=args.seed)
+    folds = StratifiedGroupKFold(n_splits=3, shuffle=True, random_state=args.seed)
     cv_results = []
     for params in configurations:
         fold_scores = []
-        for fit_indexes, validation_indexes in folds.split(x_train, categories[train_indexes]):
+        for fit_indexes, validation_indexes in folds.split(
+            x_train,
+            y_train,
+            groups=groups[train_indexes],
+        ):
             estimator = lgb.LGBMClassifier(
                 objective="binary",
                 learning_rate=0.05,
@@ -278,6 +302,7 @@ def main() -> None:
         print("Not exporting: candidate did not improve held-out balanced accuracy.")
         return
 
+    args.model.parent.mkdir(parents=True, exist_ok=True)
     converted = convert_lightgbm(
         candidate,
         initial_types=[("float_input", FloatTensorType([None, FEATURE_COUNT]))],
@@ -285,9 +310,8 @@ def main() -> None:
         zipmap=False,
     )
     onnx.checker.check_model(converted)
-    args.model.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
-        prefix=f"{args.model.stem}-",
+        prefix=f"{args.model.stem}-candidate-",
         suffix=".onnx",
         dir=args.model.parent,
         delete=False,
@@ -298,13 +322,46 @@ def main() -> None:
         exported_probabilities = onnx_fake_probabilities(temporary_path, x_test)
         if not np.allclose(exported_probabilities, candidate_probabilities, atol=1e-5, rtol=1e-5):
             raise RuntimeError("Exported ONNX probabilities differ from the selected LightGBM estimator")
-        os.replace(temporary_path, args.model)
     finally:
         temporary_path.unlink(missing_ok=True)
 
+    final_model = lgb.LGBMClassifier(
+        objective="binary",
+        learning_rate=0.05,
+        reg_lambda=1.0,
+        class_weight="balanced",
+        random_state=args.seed,
+        verbosity=-1,
+        n_jobs=max(1, min(os.cpu_count() or 1, 4)),
+        **best_params,
+    )
+    final_model.fit(features, labels)
+    final_onnx = convert_lightgbm(
+        final_model,
+        initial_types=[("float_input", FloatTensorType([None, FEATURE_COUNT]))],
+        target_opset=14,
+        zipmap=False,
+    )
+    onnx.checker.check_model(final_onnx)
+    with tempfile.NamedTemporaryFile(
+        prefix=f"{args.model.stem}-final-",
+        suffix=".onnx",
+        dir=args.model.parent,
+        delete=False,
+    ) as temporary:
+        final_path = Path(temporary.name)
+    try:
+        onnx.save_model(final_onnx, final_path)
+        final_probabilities = onnx_fake_probabilities(final_path, features)
+        python_probabilities = final_model.predict_proba(features)[:, FAKE_CLASS]
+        if not np.allclose(final_probabilities, python_probabilities, atol=1e-5, rtol=1e-5):
+            raise RuntimeError("Full-data ONNX probabilities do not match LightGBM")
+        os.replace(final_path, args.model)
+    finally:
+        final_path.unlink(missing_ok=True)
     print(
-        f"Exported exploratory model trained on {len(train_indexes)} clips to {args.model}; "
-        "held-out clips were excluded from fitting."
+        f"Exported final model fit on all {len(rows)} clips to {args.model}. "
+        "The source-grouped holdout metrics above are from the pre-refit candidate."
     )
 
 

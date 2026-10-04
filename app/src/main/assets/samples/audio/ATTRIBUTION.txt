@@ -9,16 +9,16 @@ License text: https://creativecommons.org/licenses/by/4.0/
 Included source clips:
 - demo_real.wav: real/yt_0000_part_001.flac (reference label: real)
 - demo_fake.wav: fake/el_0001_part_001.flac (reference label: fake)
-- 10 additional real clips from distinct source recordings in real/
-- 10 synthetic Amazon Polly clips from distinct source recordings in fake/
-- 10 additional synthetic ElevenLabs clips from distinct source recordings in fake/
+- 100 Gary Stafford real clips from 14 YouTube recordings
+- 100 synthetic Amazon Polly clips from 30 voice IDs
+- 100 synthetic ElevenLabs clips from 28 voice IDs
 - The additional clips and source paths are listed in dataset/MANIFEST.csv
 
 Changes made for this application: both clips are distributed as 16 kHz,
 mono, 16-bit PCM WAV files. The real clip was downmixed from stereo and
 resampled from 44.1 kHz. The fake clip was converted from FLAC to WAV.
-The 30 additional clips are also distributed as 16 kHz, mono, 16-bit PCM
-WAV files; source recordings were downmixed to mono and resampled when needed.
+The 300 dataset clips are also distributed as 16 kHz, mono, 16-bit PCM WAV
+files; source recordings were downmixed to mono and resampled when needed.
 Original files are from dataset revision
 fcf5344bb7f82b54b6b932291326d29750ef1e82.
 
@@ -28,15 +28,17 @@ They are not a validation set, and the detector may predict either label.
 The bundled knn_modelv2.onnx model was trained using one-second clips from
 this dataset. It is an adaptation derived from the dataset under CC BY 4.0.
 
-The current bundled lgbmv2.onnx model is an exploratory fit using
-Android-matched features from 21 of the 30 WAVs in dataset/MANIFEST.csv.
-Three clips from each source category were held out from model fitting and
-tested in the Android app on an x86_64 emulator using NNAPI: 8/9 clips were
-classified correctly. This small result is not a reliable estimate of
-performance on other clips, sources, devices, or one-second live audio.
-The holdout was also used to decide whether to promote the candidate, so it
-is not an untouched final test. Bundled WAV analysis uses full clips (up to
-six seconds), not one-second chunks. Training details are in
+The current bundled lgbmv2.onnx model was retrained using Android-matched
+features from all 300 WAVs in dataset/MANIFEST.csv. A source-grouped
+evaluation split used 239 clips for fitting and 61 clips held out by
+recording/voice ID. The pre-refit candidate scored 63.93% accuracy and
+61.19% balanced accuracy on this holdout; this small, source-limited result
+is exploratory, not a reliable estimate of performance on other sources,
+devices, or one-second live audio. The holdout was also used as a promotion
+gate and is not an untouched final test. The final model was refit on all
+300 clips.
+Bundled WAV analysis uses full clips (up to six seconds), not one-second
+chunks. Training details are in
 notebooks/DeepFakeDetector/train_lgbm_bundled_audio.py.
 
 The previous LightGBM model was trained using the York feature data in

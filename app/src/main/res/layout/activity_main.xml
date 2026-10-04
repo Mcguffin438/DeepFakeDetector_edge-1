@@ -296,7 +296,7 @@
                         android:layout_width="match_parent"
                         android:layout_height="52dp"
                         android:layout_marginTop="8dp"
-                        android:text="Browse 30 attributed dataset clips"
+                        android:text="Browse 300 attributed dataset clips"
                         app:cornerRadius="14dp" />
 
                     <LinearLayout
