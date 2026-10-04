@@ -32,6 +32,7 @@ This project implements a complete pipeline for edge-deployed deepfake detection
 - LightGBM ONNX input shape: `[batch, 26]`; fake is class 0, while the KNN model's fake class is class 1
 - Each ONNX model outputs class probabilities; their scores are shown separately
 - ONNX Runtime uses available execution providers with fallback; CPU inference is supported
+- Release builds include ONNX Runtime with QNN and try the Snapdragon GPU backend first, then QNN HTP, NNAPI, and CPU as available. Debug builds use the standard Android ONNX Runtime so they can run on x86_64 emulators. Android emulators do not emulate Snapdragon hardware; QNN GPU acceleration must be verified on a physical compatible Snapdragon device
 
 **Edge Integration:**
 - Android foreground service with automatic call detection
@@ -55,9 +56,12 @@ This project implements a complete pipeline for edge-deployed deepfake detection
 - The bundled KNN is trained on one-second clips from Gary Stafford's CC BY 4.0 dataset, with RobustScaler embedded in the ONNX graph
 - Nested, source-grouped five-fold evaluation on that dataset: 81.94% accuracy and 85.85% fake recall; this is not a live-call benchmark
 - Evaluation groups keep clips from the same source recording/voice together, but do not hold out entire synthetic generator platforms
-- The LightGBM model is bundled from `lgbmv2.onnx`; its original notebook used 26 features and reported a random-split score, which is not evidence of Android or live-call accuracy
+- LightGBM was retrained from the repository's York feature CSV using `train_lgbm_york.py`; the 26-feature input retains the notebook's column order
 - Android's chroma feature is an approximation and has not been verified against the LightGBM training feature extractor
-- Cross-dataset experiment on all 1,866 clips in Gary Stafford dataset v4, using a Python port of the Android one-second feature pipeline: 41.48% accuracy on the first complete second per clip (62.81% fake recall, 20.15% real recall); 39.17% accuracy across all 6,847 complete one-second chunks. This is an offline experiment, not a device benchmark
+- The retrained LightGBM scores 97.58% accuracy on a random 30% holdout (3,063 rows) of the York feature CSV, versus 62.68% for the previous ONNX model on the same split. Holdout fake recall is 96.45%, real recall 98.70%. This CSV has no retained source IDs or chunk-duration metadata, so the result is not a source-independent or one-second/live-call benchmark
+- On the separate Gary Stafford dataset v4, the retrained model scores 45.55% accuracy on the first complete one-second chunk from each of 1,866 clips (88.75% fake recall, 2.36% real recall), and 39.92% across all 6,847 complete one-second chunks. This poor cross-dataset result means the model is not reliable for live-call alerts despite its York holdout score
+- On the bundled `demo_fake.wav` reference-fake clip, app-style feature extraction followed by `lgbmv2.onnx` predicted REAL: 17.91% fake / 82.09% real for the full 3.934-second clip, and 0.14% fake / 99.86% real for its first one-second chunk. This is an offline ONNX test using a port of the Android feature pipeline; it demonstrates a false negative, not device validation
+- The app's **Test Fake Sample** flow was also run on a Pixel API 35 x86_64 emulator with the bundled models loaded: KNN showed 100% fake, LightGBM showed 17% fake / 83% real, and the app reported model disagreement. This single full-clip demo test is not an accuracy metric or a real-device benchmark
 - One-second live predictions have not been validated on phone hardware; Android call capture and acoustics may reduce reliability
 
 **Architecture Highlights:**
@@ -98,7 +102,7 @@ Required permissions:
 3. **Privacy**: All processing occurs locally, no data transmission
 
 ### Bundled Demo Audio
-Use **Test real sample** or **Test fake sample** in the Tools section to run the included speech clips through both models. The reference labels identify the dataset classes; predictions may not match them and are not an accuracy test. These two clips are small examples from [Gary Stafford's Deepfake Audio Detection Dataset v4](https://huggingface.co/datasets/garystafford/deepfake-audio-detection), not the full dataset. The source dataset contains 1,866 clips total: 933 real and 933 synthetic. Its synthetic audio is attributed to these text-to-speech platforms:
+Use **Test real sample** or **Test fake sample** in the Tools section for the original examples, or choose **Browse 30 attributed dataset clips** to select among ten real clips from Gary Stafford's dataset, ten Amazon Polly fakes, and ten ElevenLabs fakes. All are run through both models. Reference labels come from the dataset; predictions may not match them, and this small selection is not an accuracy test. Clips are from [Gary Stafford's Deepfake Audio Detection Dataset v4](https://huggingface.co/datasets/garystafford/deepfake-audio-detection), revision `fcf5344bb7f82b54b6b932291326d29750ef1e82`, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The dataset contains 1,866 clips total: 933 real and 933 synthetic. Its synthetic audio is attributed to these text-to-speech platforms:
 
 | Synthetic audio source | Clips |
 |---|---:|
@@ -110,7 +114,7 @@ Use **Test real sample** or **Test fake sample** in the Tools section to run the
 | Speechify | 211 |
 | **Total synthetic clips** | **933** |
 
-The app bundles only one synthetic example: `demo_fake.wav`, sourced from `fake/el_0001_part_001.flac` (ElevenLabs, based on the dataset filename prefix). It is distributed as 16 kHz, mono, 16-bit PCM WAV and is about 3.9 seconds long. The bundled real example, `demo_real.wav`, comes from `real/yt_0000_part_001.flac`; it was downmixed from stereo and resampled from 44.1 kHz to 16 kHz mono PCM WAV. The dataset is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). See `app/src/main/assets/samples/audio/ATTRIBUTION.txt` for clip-level attribution. The samples exercise the app's audio-loading and inference flow; they are not a validation set, and detector predictions may not match the reference labels.
+The existing `demo_fake.wav` comes from `fake/el_0001_part_001.flac`; `demo_real.wav` comes from `real/yt_0000_part_001.flac`. The 30 additional clips are 16 kHz mono 16-bit PCM WAV conversions from the three categories listed above; all source FLAC paths are recorded in `app/src/main/assets/samples/audio/dataset/MANIFEST.csv`. The samples exercise the app's audio-loading and inference flow; they are not a validation set, and detector predictions may not match their reference labels. Clip-level attribution and conversion details are in `app/src/main/assets/samples/audio/ATTRIBUTION.txt`.
 
 ### Example Detection Flow
 ```kotlin
@@ -171,6 +175,15 @@ python notebooks/DeepFakeDetector/train_knn_1s.py --dataset-root path/to/dataset
 ```
 
 The script selects KNN settings with source-grouped cross-validation, fits the selected RobustScaler/KNN pipeline on all one-second clips, and exports the ONNX model to the app assets by default. The dataset is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); attribution is recorded in `app/src/main/assets/samples/audio/ATTRIBUTION.txt`.
+
+### Retraining the LightGBM
+Install the dependencies from `requirements.txt`, then run:
+
+```bash
+python notebooks/DeepFakeDetector/train_lgbm_york.py
+```
+
+This tunes LightGBM with five-fold stratified cross-validation on the training portion of `audio_features_stringremoved.csv`, compares it to the bundled ONNX model on the fixed 30% random holdout, and replaces `lgbmv2.onnx` only if holdout accuracy improves. The final model is refit on all York feature rows. The source CSV lacks source IDs and audio-duration metadata, so its holdout score must not be interpreted as one-second or live-call accuracy. The cross-dataset one-second result above shows that the York holdout score does not transfer to the Gary Stafford clips.
 
 ### Adding New Features
 1. Keep feature extraction in `AudioProcessor.kt` aligned with each model’s training feature order and scaling.

@@ -75,6 +75,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     private lateinit var btnAnalyzeFile: Button
     private lateinit var btnTestRealSample: MaterialButton
     private lateinit var btnTestFakeSample: MaterialButton
+    private lateinit var btnBrowseDatasetSamples: MaterialButton
     private lateinit var tvSelectedFile: TextView
     private lateinit var layoutAnalysisResults: LinearLayout
     private lateinit var tvAnalysisResult: TextView
@@ -90,6 +91,12 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         val samples: ShortArray,
         val sampleRate: Int,
         val channelCount: Int
+    )
+
+    private data class BundledDemoSample(
+        val assetPath: String,
+        val title: String,
+        val referenceLabel: String
     )
     
     // Animation state
@@ -168,6 +175,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         btnAnalyzeFile = findViewById(R.id.btnAnalyzeFile)
         btnTestRealSample = findViewById(R.id.btnTestRealSample)
         btnTestFakeSample = findViewById(R.id.btnTestFakeSample)
+        btnBrowseDatasetSamples = findViewById(R.id.btnBrowseDatasetSamples)
         tvSelectedFile = findViewById(R.id.tvSelectedFile)
         layoutAnalysisResults = findViewById(R.id.layoutAnalysisResults)
         tvAnalysisResult = findViewById(R.id.tvAnalysisResult)
@@ -204,11 +212,15 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
 
         btnTestRealSample.setOnClickListener {
-            analyzeBundledSample("demo_real.wav", "real")
+            analyzeBundledSample("samples/audio/demo_real.wav", "Gary Stafford demo clip", "real")
         }
 
         btnTestFakeSample.setOnClickListener {
-            analyzeBundledSample("demo_fake.wav", "fake")
+            analyzeBundledSample("samples/audio/demo_fake.wav", "ElevenLabs demo clip", "fake")
+        }
+
+        btnBrowseDatasetSamples.setOnClickListener {
+            showDatasetSamplePicker()
         }
     }
     
@@ -611,18 +623,52 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
 
-    private fun analyzeBundledSample(fileName: String, expectedLabel: String) {
+    private fun showDatasetSamplePicker() {
+        val categories = listOf(
+            Triple("Gary Stafford dataset - real speech", "samples/audio/dataset/york_real", "real"),
+            Triple("Amazon Polly - synthetic speech", "samples/audio/dataset/amazon_polly_fake", "fake"),
+            Triple("ElevenLabs - synthetic speech", "samples/audio/dataset/elevenlabs_fake", "fake")
+        )
+        val samples = categories.flatMap { (category, assetDirectory, referenceLabel) ->
+            assets.list(assetDirectory).orEmpty()
+                .filter { it.endsWith(".wav", ignoreCase = true) }
+                .sorted()
+                .map { fileName ->
+                    BundledDemoSample(
+                        assetPath = "$assetDirectory/$fileName",
+                        title = "$category - ${fileName.substringBeforeLast('.')}",
+                        referenceLabel = referenceLabel
+                    )
+                }
+        }
+        if (samples.isEmpty()) {
+            Toast.makeText(this, "No bundled dataset clips are available", Toast.LENGTH_LONG).show()
+            return
+        }
+
+        AlertDialog.Builder(this)
+            .setTitle("Select an attributed dataset clip")
+            .setItems(samples.map(BundledDemoSample::title).toTypedArray()) { _, index ->
+                val selected = samples[index]
+                analyzeBundledSample(selected.assetPath, selected.title, selected.referenceLabel)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun analyzeBundledSample(assetPath: String, title: String, expectedLabel: String) {
         lifecycleScope.launch {
             btnTestRealSample.isEnabled = false
             btnTestFakeSample.isEnabled = false
+            btnBrowseDatasetSamples.isEnabled = false
             btnAnalyzeFile.isEnabled = false
             progressBar.visibility = View.VISIBLE
-            tvSelectedFile.text = "Bundled demo sample: $expectedLabel (reference label)"
+            tvSelectedFile.text = "$title ($expectedLabel reference label)"
             layoutAnalysisResults.visibility = View.GONE
 
             try {
                 val audioFile = withContext(Dispatchers.IO) {
-                    assets.open("samples/audio/$fileName").use { input ->
+                    assets.open(assetPath).use { input ->
                         parsePcm16Wav(input.readBytes())
                     }
                 }
@@ -636,6 +682,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
                     progressBar.visibility = View.GONE
                     btnTestRealSample.isEnabled = true
                     btnTestFakeSample.isEnabled = true
+                    btnBrowseDatasetSamples.isEnabled = true
                     btnAnalyzeFile.isEnabled = selectedAudioUri != null
                 }
             } catch (e: Exception) {
@@ -648,6 +695,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
                 progressBar.visibility = View.GONE
                 btnTestRealSample.isEnabled = true
                 btnTestFakeSample.isEnabled = true
+                btnBrowseDatasetSamples.isEnabled = true
                 btnAnalyzeFile.isEnabled = selectedAudioUri != null
             }
         }

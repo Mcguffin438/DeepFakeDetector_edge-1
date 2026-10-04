@@ -21,6 +21,7 @@ import java.io.File
 import java.io.IOException
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
+import ai.onnxruntime.OrtProvider
 import ai.onnxruntime.OrtSession
 import ai.onnxruntime.TensorInfo
 import android.content.Context
@@ -305,12 +306,24 @@ class RealTimeAudioDetectionService : Service() {
 
     private fun createSessionWithProviderFallbacks(modelFile: File): OrtSession {
         val env = ortEnv ?: throw IllegalStateException("ONNX Runtime environment is not initialized")
-        val providers = listOf<Pair<String, (OrtSession.SessionOptions) -> Unit>>(
-            "QNN GPU" to { options -> options.addQnn(mapOf("backend_type" to "gpu")) },
-            "QNN HTP" to { options -> options.addQnn(mapOf("backend_type" to "htp")) },
-            "NNAPI" to { options -> options.addNnapi() },
-            "CPU" to { _ -> }
+        val availableProviders = OrtEnvironment.getAvailableProviders()
+        Timber.i("ONNX Runtime available providers: ${availableProviders.joinToString { it.name }}")
+        val acceleratedProviders = listOf<Triple<String, OrtProvider, (OrtSession.SessionOptions) -> Unit>>(
+            Triple("QNN GPU", OrtProvider.QNN) { options ->
+                options.addQnn(mapOf("backend_type" to "gpu"))
+            },
+            Triple("QNN HTP", OrtProvider.QNN) { options ->
+                options.addQnn(mapOf("backend_type" to "htp"))
+            },
+            Triple("NNAPI", OrtProvider.NNAPI) { options -> options.addNnapi() }
         )
+        val providers = acceleratedProviders
+            .filter { (_, provider, _) -> provider in availableProviders }
+            .map { (name, _, configure) -> name to configure } +
+            ("CPU" to { _: OrtSession.SessionOptions -> })
+        if (OrtProvider.QNN !in availableProviders) {
+            Timber.i("QNN is unavailable in this runtime/device; Snapdragon GPU acceleration cannot be used")
+        }
         var lastError: Exception? = null
 
         for ((providerName, configureProvider) in providers) {
@@ -319,7 +332,7 @@ class RealTimeAudioDetectionService : Service() {
                 configureProvider(options)
                 val session = env.createSession(modelFile.absolutePath, options)
                 Timber.i(
-                    "ONNX session created with $providerName provider enabled; " +
+                    "ONNX session created with $providerName execution provider; " +
                         "unsupported operators may execute on CPU"
                 )
                 return session
@@ -633,6 +646,15 @@ class RealTimeAudioDetectionService : Service() {
                     ?: (value[fakeClassIndex.toString()] as? Number)?.toFloat()
                     ?: throw IllegalStateException("Probability output has no fake class ($fakeClassIndex)")
             }
+            is Array<*> -> {
+                require(value.size == 1) {
+                    "Probability output must have batch size 1, found ${value.size}"
+                }
+                val classProbabilities = value[0] as? FloatArray
+                    ?: throw IllegalStateException("Probability output batch has an unsupported array format")
+                selectFakeClassProbability(classProbabilities, fakeClassIndex)
+            }
+            is FloatArray -> selectFakeClassProbability(value, fakeClassIndex)
             is OnnxTensor -> {
                 val tensorInfo = probabilityOutput.info as? TensorInfo
                     ?: throw IllegalStateException("Probability output is not a tensor")
@@ -641,11 +663,7 @@ class RealTimeAudioDetectionService : Service() {
                 }
                 val buffer = value.floatBuffer
                 val values = FloatArray(buffer.remaining()).also(buffer::get)
-                when (values.size) {
-                    1 -> values[0]
-                    2 -> values[fakeClassIndex]
-                    else -> throw IllegalStateException("Probability output has ${values.size} values")
-                }
+                selectFakeClassProbability(values, fakeClassIndex)
             }
             else -> throw IllegalStateException("Probability output has unsupported type ${value::class.java.name}")
         }
@@ -653,6 +671,14 @@ class RealTimeAudioDetectionService : Service() {
             "Model returned invalid fake probability: $probability"
         }
         return probability
+    }
+
+    private fun selectFakeClassProbability(probabilities: FloatArray, fakeClassIndex: Int): Float {
+        return when (probabilities.size) {
+            1 -> probabilities[0]
+            2 -> probabilities[fakeClassIndex]
+            else -> throw IllegalStateException("Probability output has ${probabilities.size} values")
+        }
     }
 
     private suspend fun processAudioChunk(audioData: ShortArray, chunkId: Int) {

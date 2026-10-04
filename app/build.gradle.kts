@@ -92,7 +92,8 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
 
     // ONNX Support
-    implementation(libs.onnxruntime.qnn)
+    debugImplementation(libs.onnxruntime.android)
+    releaseImplementation(libs.onnxruntime.qnn)
     implementation(libs.kotlindl.onnx) {
         exclude(group = "com.microsoft.onnxruntime", module = "onnxruntime-android")
     }

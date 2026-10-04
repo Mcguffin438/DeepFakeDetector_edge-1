@@ -290,6 +290,15 @@
                             app:cornerRadius="14dp" />
                     </LinearLayout>
 
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/btnBrowseDatasetSamples"
+                        style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:layout_marginTop="8dp"
+                        android:text="Browse 30 attributed dataset clips"
+                        app:cornerRadius="14dp" />
+
                     <LinearLayout
                         android:id="@+id/layoutAnalysisResults"
                         android:layout_width="match_parent"

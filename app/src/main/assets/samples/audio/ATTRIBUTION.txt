@@ -9,10 +9,18 @@ License text: https://creativecommons.org/licenses/by/4.0/
 Included source clips:
 - demo_real.wav: real/yt_0000_part_001.flac (reference label: real)
 - demo_fake.wav: fake/el_0001_part_001.flac (reference label: fake)
+- 10 additional real clips from distinct source recordings in real/
+- 10 synthetic Amazon Polly clips from distinct source recordings in fake/
+- 10 additional synthetic ElevenLabs clips from distinct source recordings in fake/
+- The additional clips and source paths are listed in dataset/MANIFEST.csv
 
 Changes made for this application: both clips are distributed as 16 kHz,
 mono, 16-bit PCM WAV files. The real clip was downmixed from stereo and
 resampled from 44.1 kHz. The fake clip was converted from FLAC to WAV.
+The 30 additional clips are also distributed as 16 kHz, mono, 16-bit PCM
+WAV files; source recordings were downmixed to mono and resampled when needed.
+Original files are from dataset revision
+fcf5344bb7f82b54b6b932291326d29750ef1e82.
 
 These samples are for exercising the app's audio-loading and inference flow.
 They are not a validation set, and the detector may predict either label.
@@ -20,8 +28,8 @@ They are not a validation set, and the detector may predict either label.
 The bundled knn_modelv2.onnx model was trained using one-second clips from
 this dataset. It is an adaptation derived from the dataset under CC BY 4.0.
 
-The bundled lgbmv2.onnx model was supplied separately by the application
-author and corresponds to the "Final Audio LGBM Classifier" notebook. Its
-reported notebook metrics are not representative of Android performance.
+The bundled lgbmv2.onnx model was retrained using the York feature data in
+notebooks/DeepFakeDetector/audio_features_stringremoved.csv. Its held-out
+feature-row score does not represent one-second Android audio performance.
 The Android chroma_stft input is approximated and has not been validated
-against the notebook's feature extraction pipeline.
+against the original feature extraction pipeline.
