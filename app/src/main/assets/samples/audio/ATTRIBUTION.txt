@@ -16,3 +16,6 @@ resampled from 44.1 kHz. The fake clip was converted from FLAC to WAV.
 
 These samples are for exercising the app's audio-loading and inference flow.
 They are not a validation set, and the detector may predict either label.
+
+The bundled knn_modelv2.onnx model was trained using one-second clips from
+this dataset. It is an adaptation derived from the dataset under CC BY 4.0.

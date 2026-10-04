@@ -26,25 +26,25 @@
   <text x="64" y="140" class="lane-title">1. Train and export the KNN model</text>
 
   <rect x="68" y="180" width="220" height="132" rx="14" class="box"/>
-  <text x="178" y="214" text-anchor="middle" class="box-title">Labeled audio features</text>
-  <text x="178" y="244" text-anchor="middle" class="body">25 features per sample</text>
-  <text x="178" y="268" text-anchor="middle" class="body">plus real/fake label</text>
-  <text x="178" y="291" text-anchor="middle" class="small">CSV training dataset</text>
+  <text x="178" y="214" text-anchor="middle" class="box-title">Labeled speech clips</text>
+  <text x="178" y="244" text-anchor="middle" class="body">First one-second window</text>
+  <text x="178" y="268" text-anchor="middle" class="body">real and synthetic labels</text>
+  <text x="178" y="291" text-anchor="middle" class="small">Gary Stafford dataset v4</text>
 
   <path d="M288 246 H338" class="arrow"/>
 
   <rect x="350" y="180" width="205" height="132" rx="14" class="box"/>
-  <text x="452" y="214" text-anchor="middle" class="box-title">Fit and evaluate</text>
-  <text x="452" y="244" text-anchor="middle" class="body">Select KNN settings</text>
-  <text x="452" y="268" text-anchor="middle" class="body">Evaluate on held-out data</text>
-  <text x="452" y="291" text-anchor="middle" class="small">96.03% on one fixed split</text>
+  <text x="452" y="214" text-anchor="middle" class="box-title">Extract and evaluate</text>
+  <text x="452" y="244" text-anchor="middle" class="body">App-matched 25 features</text>
+  <text x="452" y="268" text-anchor="middle" class="body">Source-grouped validation</text>
+  <text x="452" y="291" text-anchor="middle" class="small">Nested CV: 81.94% accuracy*</text>
 
   <path d="M555 246 H605" class="arrow"/>
 
   <rect x="617" y="180" width="230" height="132" rx="14" fill="#fff8e6" stroke="#d9a441" stroke-width="2"/>
   <text x="732" y="214" text-anchor="middle" class="box-title">RobustScaler + KNN</text>
-  <text x="732" y="244" text-anchor="middle" class="body">k = 3 · cosine distance</text>
-  <text x="732" y="268" text-anchor="middle" class="body">uniform neighbor weights</text>
+  <text x="732" y="244" text-anchor="middle" class="body">k = 15 · Euclidean distance</text>
+  <text x="732" y="268" text-anchor="middle" class="body">distance-weighted neighbors</text>
   <text x="732" y="291" text-anchor="middle" class="small">Binary real/fake classifier</text>
 
   <path d="M847 246 H897" class="arrow"/>
@@ -90,5 +90,5 @@
 
   <path d="M1019 312 V391 H699 V478" class="arrow"/>
 
-  <text x="600" y="727" text-anchor="middle" class="small">The held-out CSV score does not establish accuracy on live calls; Android feature extraction may differ from training.</text>
+  <text x="600" y="727" text-anchor="middle" class="small">*Grouped CV did not hold out whole TTS platforms. Results are not a live-call accuracy guarantee.</text>
 </svg>

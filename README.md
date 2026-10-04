@@ -28,7 +28,7 @@ This project implements a complete pipeline for edge-deployed deepfake detection
 
 **Model Training & Deployment:**
 - ONNX input shape: `[batch, 25]`
-- KNN classifier with embedded RobustScaler, 3 neighbors, cosine distance, and uniform weights
+- KNN classifier with embedded RobustScaler, 15 neighbors, Euclidean distance, and distance weighting
 - ONNX model outputs the class label and class probabilities
 - ONNX Runtime uses available execution providers with fallback; CPU inference is supported
 
@@ -51,13 +51,14 @@ This project implements a complete pipeline for edge-deployed deepfake detection
 
 **Model and evaluation:**
 - Audio processing: 25 KNN input features per chunk
-- Model deployment: ONNX with the scaler embedded in the model
-- The 96.03% holdout score is from one fixed dataset split, not an on-device or live-call benchmark
-- One-second live predictions have not been separately validated; the short window and Android feature extraction may reduce reliability
+- The bundled KNN is trained on one-second clips from Gary Stafford's CC BY 4.0 dataset, with RobustScaler embedded in the ONNX graph
+- Nested, source-grouped five-fold evaluation on that dataset: 81.94% accuracy and 85.85% fake recall; this is not a live-call benchmark
+- Evaluation groups keep clips from the same source recording/voice together, but do not hold out entire synthetic generator platforms
+- One-second live predictions have not been validated on phone hardware; Android call capture and acoustics may reduce reliability
 
 **Architecture Highlights:**
 - KNN model input: `[batch, 25]`
-- KNN configuration: 3 neighbors, cosine distance, uniform weights
+- KNN configuration: 15 neighbors, Euclidean distance, distance weighting
 - Alert system: fake/real probability scores with experimental warnings
 
 ## Prerequisites
@@ -153,6 +154,15 @@ DeepFakeDetector_edge/
 - **Input Features**: RMS, spectral centroid, bandwidth, rolloff, zero-crossing rate, followed by 20 MFCC means
 - **Audio Format**: 16 kHz mono or stereo PCM; live call inference uses one-second windows
 - **Outputs**: Predicted class and class probabilities
+
+### Retraining the KNN
+The current model was retrained from the one-second feature pipeline in `notebooks/DeepFakeDetector/train_knn_1s.py`. Download the [Deepfake Audio Detection Dataset v4](https://huggingface.co/datasets/garystafford/deepfake-audio-detection) into a directory with `real/` and `fake/` FLAC subdirectories, then run:
+
+```bash
+python notebooks/DeepFakeDetector/train_knn_1s.py --dataset-root path/to/dataset
+```
+
+The script selects KNN settings with source-grouped cross-validation, fits the selected RobustScaler/KNN pipeline on all one-second clips, and exports the ONNX model to the app assets by default. The dataset is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); attribution is recorded in `app/src/main/assets/samples/audio/ATTRIBUTION.txt`.
 
 ### Adding New Features
 1. Keep feature extraction in `AudioProcessor.kt` aligned with the model’s training feature order and scaling.
