@@ -1,6 +1,6 @@
 # RealTimeAudioDetect - Real-time Deepfake Audio Detection
 
-A complete edge deployment pipeline for real-time deepfake detection during phone calls. This Android application uses multi-channel feature extraction and on-device PyTorch Mobile inference to detect synthetic audio without cloud connectivity. This project is the implementation of the solution described in **Real-time Audio Detection on the Edge: Building Smarter Detection Where It Counts.**
+A real-time Android deepfake-audio detection app that runs a KNN classifier locally with ONNX Runtime. The app extracts 25 audio features and feeds them to the bundled `knn_modelv2.onnx` model, which includes its RobustScaler.
 
 ![KNN deepfake audio detection workflow](images/deepfake_edge_workflow.svg)
 
@@ -21,68 +21,59 @@ A complete edge deployment pipeline for real-time deepfake detection during phon
 This project implements a complete pipeline for edge-deployed deepfake detection, from feature extraction to real-time inference.
 
 **Feature Extraction Process:**
-- Multi-channel audio analysis: MelSpectrogram, MFCC, LFCC features
-- 6-second audio chunks processed at 16kHz sample rate
-- Dynamic tensor shapes with time alignment across feature channels
-- Real-time processing with <1s latency per chunk
+- 25 features per audio chunk: RMS, spectral centroid, bandwidth, rolloff, zero-crossing rate, and 20 MFCC means
+- Audio is processed at 16 kHz; call monitoring uses chunks from the built-in microphone and is intended for speakerphone use
+- Features are passed to the KNN model in the training feature order
 
 **Model Training & Deployment:**
-- 3-channel input tensor: `[batch, 3, 64, time_steps]`
-- PyTorch Mobile quantized models for edge deployment
-- Binary classification with sigmoid activation
-- CPU inference optimized for Android devices
+- ONNX input shape: `[batch, 25]`
+- KNN classifier with embedded RobustScaler, 3 neighbors, cosine distance, and uniform weights
+- ONNX model outputs the class label and class probabilities
+- ONNX Runtime uses available execution providers with fallback; CPU inference is supported
 
 **Edge Integration:**
 - Android foreground service with automatic call detection
-- Real-time visual overlay with confidence-based threat levels
+- Real-time visual overlay and fake/real probability scores
 - 100% local processing - no network connectivity required
 - Privacy-first design with in-memory audio processing
 
 ## Features
 
-- **Multi-Channel Analysis**: MelSpectrogram + MFCC + LFCC feature extraction
-- **Edge Deployment**: PyTorch Mobile with CPU-optimized inference
+- **Audio Features**: 25-dimensional feature vector for the bundled KNN
+- **Edge Deployment**: ONNX Runtime with CPU fallback
 - **Real-Time Alerts**: Visual overlay with confidence-based threat detection
 - **Auto-Activation**: Foreground service monitors calls automatically
 - **Privacy-First**: 100% local processing, no data transmission
-- **Cross-Architecture**: ARM64-v8a and ARMv7 Android support
+- **Model**: `app/src/main/assets/models/knn_modelv2.onnx`
 
 ## Key Technical Achievements
 
-**Performance Metrics:**
-- Real-time processing: <1s inference per 6-second audio chunk
-- Memory efficiency: ~50-100MB during active inference
-- Audio processing: 3-channel feature extraction with time alignment
-- Model deployment: PyTorch Mobile .pt format for edge optimization
+**Model and evaluation:**
+- Audio processing: 25 KNN input features per chunk
+- Model deployment: ONNX with the scaler embedded in the model
+- The 96.03% holdout score is from one fixed dataset split, not an on-device or live-call benchmark
 
 **Architecture Highlights:**
-- Feature extraction: n_fft=780, hop_length=195, 64 feature bins
-- Input tensor: Dynamic time dimension `[1, 3, 64, T]`
-- Multi-channel DCT: Applied to mel and linear spectrograms
-- Alert system: Confidence thresholds with visual feedback
+- KNN model input: `[batch, 25]`
+- KNN configuration: 3 neighbors, cosine distance, uniform weights
+- Alert system: fake/real probability scores with experimental warnings
 
 ## Prerequisites
 
 - Android device (API 24+)
-- Trained PyTorch model (.pt format)
 - Android Studio for development
-- Phone call recording capabilities
+- Required call/audio permissions and microphone access
+- Speakerphone is intended for call-audio capture; actual capture is device- and Android-version-dependent
 
 ## Installation
 
-### 1. Add Model to App
-```bash
-# Place your trained model
-cp your_model.pt app/src/main/assets/models/deepfake_detector.pt
-```
-
-### 2. Build and Install
+### Build and Install
 ```bash
 ./gradlew assembleDebug
 adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
-### 3. Grant Permissions
+### Grant Permissions
 Required permissions:
 - Phone state access, Audio recording, System overlay
 - Foreground service (microphone + phone call types)
@@ -97,24 +88,34 @@ Required permissions:
    - ⚠️ **Red**: High-confidence deepfake (>90%)
 3. **Privacy**: All processing occurs locally, no data transmission
 
+### Bundled Demo Audio
+Use **Test real sample** or **Test fake sample** in the Tools section to run the included speech clips through the KNN model. The reference labels identify the dataset classes; predictions may not match them and are not an accuracy test. These two clips are small examples from [Gary Stafford's Deepfake Audio Detection Dataset v4](https://huggingface.co/datasets/garystafford/deepfake-audio-detection), not the full dataset. The source dataset contains 1,866 clips total: 933 real and 933 synthetic. Its synthetic audio is attributed to these text-to-speech platforms:
+
+| Synthetic audio source | Clips |
+|---|---:|
+| Amazon Polly | 209 |
+| ElevenLabs | 173 |
+| Hexgrad Kokoro | 68 |
+| Hume AI | 116 |
+| Luvvoice | 156 |
+| Speechify | 211 |
+| **Total synthetic clips** | **933** |
+
+The app bundles only one synthetic example: `demo_fake.wav`, sourced from `fake/el_0001_part_001.flac` (ElevenLabs, based on the dataset filename prefix). It is distributed as 16 kHz, mono, 16-bit PCM WAV and is about 3.9 seconds long. The bundled real example, `demo_real.wav`, comes from `real/yt_0000_part_001.flac`; it was downmixed from stereo and resampled from 44.1 kHz to 16 kHz mono PCM WAV. The dataset is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). See `app/src/main/assets/samples/audio/ATTRIBUTION.txt` for clip-level attribution. The samples exercise the app's audio-loading and inference flow; they are not a validation set, and detector predictions may not match the reference labels.
+
 ### Example Detection Flow
 ```kotlin
-// Generate 3-channel features (MelSpec, MFCC, LFCC)
-val featuresResult = audioProcessor.generateMultiChannelFeatures(audioData, SAMPLE_RATE)
-
-// Convert features to PyTorch tensor [1, 3, 64, T]
-val inputTensor = Tensor.fromBlob(featuresResult.features, shape)
-
-// Run inference and get confidence
-val outputTensor = deepfakeModel.forward(IValue.from(inputTensor)).toTensor()
-val fakeProb = sigmoid(outputTensor.dataAsFloatArray[0])
+// The service extracts the model's 25 features, creates a [1, 25] ONNX tensor,
+// and reads class probabilities through ONNX Runtime.
+val result = service.analyzeRawAudio(audioData, SAMPLE_RATE)
+val fakeProbability = result.fakeConfidence
 ```
 
 ## Core Components
 
 ### Audio Processing
-- **AudioProcessor**: Multi-channel feature extraction (MelSpec, MFCC, LFCC)
-- **RealTimeAudioDetectionService**: Edge deployment service with foreground monitoring
+- **AudioProcessor**: KNN feature extraction (five spectral/time-domain statistics plus 20 MFCC means)
+- **RealTimeAudioDetectionService**: ONNX Runtime inference, call-audio monitoring, and provider fallback
 - **PhoneStateReceiver**: Automatic call detection and service activation
 
 ### User Interface
@@ -122,8 +123,8 @@ val fakeProb = sigmoid(outputTensor.dataAsFloatArray[0])
 - **MainActivity**: App configuration and monitoring controls
 
 ### Model Integration
-- **PyTorch Mobile**: Quantized model deployment for CPU inference
-- **Feature Pipeline**: 6-second audio chunks → 3-channel features → inference
+- **ONNX Runtime**: Loads the bundled `knn_modelv2.onnx`, whose graph includes RobustScaler and KNN
+- **Feature Pipeline**: 16 kHz call audio → 25 features → ONNX KNN inference → fake/real probabilities
 
 ## Project Structure
 
@@ -131,11 +132,12 @@ val fakeProb = sigmoid(outputTensor.dataAsFloatArray[0])
 DeepFakeDetector_edge/
 ├── app/src/main/
 │   ├── java/com/example/realtimeaudiodetect/
-│   │   ├── AudioProcessor.kt           # Multi-channel feature extraction
+│   │   ├── AudioProcessor.kt           # KNN audio feature extraction
 │   │   ├── RealTimeAudioDetectionService.kt # Edge deployment service
 │   │   ├── OverlayView.kt             # Real-time visual alerts
 │   │   └── PhoneStateReceiver.kt      # Call detection
-│   ├── assets/models/                 # PyTorch Mobile models
+│   ├── assets/models/                 # ONNX models
+│   ├── assets/samples/audio/          # Attributed real/fake demo WAV files
 │   └── AndroidManifest.xml           # Permissions and services
 ├── notebooks/                         # Training notebooks
 └── README.md
@@ -144,19 +146,19 @@ DeepFakeDetector_edge/
 ## Development
 
 ### Model Requirements
-- **Input Shape**: `[batch, 3, 64, time_steps]`
-- **Feature Channels**: MelSpectrogram, MFCC, LFCC (64 bins each)
-- **Audio Format**: 16kHz mono, 6-second duration
-- **Output Format**: Binary classification with sigmoid activation
+- **Model**: `app/src/main/assets/models/knn_modelv2.onnx`
+- **Input Shape**: `[batch, 25]`
+- **Input Features**: RMS, spectral centroid, bandwidth, rolloff, zero-crossing rate, followed by 20 MFCC means
+- **Audio Format**: 16 kHz mono or stereo PCM; inference uses a six-second feature window
+- **Outputs**: Predicted class and class probabilities
 
 ### Adding New Features
-1. Implement feature extraction in `AudioProcessor.kt`
-2. Update tensor shapes in `RealTimeAudioDetectionService.kt`
-3. Modify overlay alerts in `OverlayView.kt`
+1. Keep feature extraction in `AudioProcessor.kt` aligned with the model’s training feature order and scaling.
+2. Update model input/output handling in `RealTimeAudioDetectionService.kt` if the ONNX interface changes.
+3. Update the displayed probabilities in `MainActivity.kt` and `OverlayView.kt` as needed.
 
 ### Key Dependencies
-- PyTorch Mobile (Android)
-- Android NDK for audio processing
+- ONNX Runtime Android
 - Foreground service framework
 
 ## License

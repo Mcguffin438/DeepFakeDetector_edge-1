@@ -1,0 +1,18 @@
+Demo audio samples
+
+Dataset: Deepfake Audio Detection Dataset (v4)
+Author: Gary Stafford
+Source: https://huggingface.co/datasets/garystafford/deepfake-audio-detection
+License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+License text: https://creativecommons.org/licenses/by/4.0/
+
+Included source clips:
+- demo_real.wav: real/yt_0000_part_001.flac (reference label: real)
+- demo_fake.wav: fake/el_0001_part_001.flac (reference label: fake)
+
+Changes made for this application: both clips are distributed as 16 kHz,
+mono, 16-bit PCM WAV files. The real clip was downmixed from stereo and
+resampled from 44.1 kHz. The fake clip was converted from FLAC to WAV.
+
+These samples are for exercising the app's audio-loading and inference flow.
+They are not a validation set, and the detector may predict either label.

@@ -73,6 +73,8 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     // File analysis UI
     private lateinit var btnSelectAudioFile: Button
     private lateinit var btnAnalyzeFile: Button
+    private lateinit var btnTestRealSample: MaterialButton
+    private lateinit var btnTestFakeSample: MaterialButton
     private lateinit var tvSelectedFile: TextView
     private lateinit var layoutAnalysisResults: LinearLayout
     private lateinit var tvAnalysisResult: TextView
@@ -164,6 +166,8 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         
         btnSelectAudioFile = findViewById(R.id.btnSelectAudioFile)
         btnAnalyzeFile = findViewById(R.id.btnAnalyzeFile)
+        btnTestRealSample = findViewById(R.id.btnTestRealSample)
+        btnTestFakeSample = findViewById(R.id.btnTestFakeSample)
         tvSelectedFile = findViewById(R.id.tvSelectedFile)
         layoutAnalysisResults = findViewById(R.id.layoutAnalysisResults)
         tvAnalysisResult = findViewById(R.id.tvAnalysisResult)
@@ -197,6 +201,14 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         
         btnAnalyzeFile.setOnClickListener {
             analyzeSelectedAudioFile()
+        }
+
+        btnTestRealSample.setOnClickListener {
+            analyzeBundledSample("demo_real.wav", "real")
+        }
+
+        btnTestFakeSample.setOnClickListener {
+            analyzeBundledSample("demo_fake.wav", "fake")
         }
     }
     
@@ -583,6 +595,48 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
                     btnAnalyzeFile.isEnabled = true
                     progressBar.visibility = View.GONE
                 }
+            }
+        }
+    }
+
+    private fun analyzeBundledSample(fileName: String, expectedLabel: String) {
+        lifecycleScope.launch {
+            btnTestRealSample.isEnabled = false
+            btnTestFakeSample.isEnabled = false
+            btnAnalyzeFile.isEnabled = false
+            progressBar.visibility = View.VISIBLE
+            tvSelectedFile.text = "Bundled demo sample: $expectedLabel (reference label)"
+            layoutAnalysisResults.visibility = View.GONE
+
+            try {
+                val audioFile = withContext(Dispatchers.IO) {
+                    assets.open("samples/audio/$fileName").use { input ->
+                        parsePcm16Wav(input.readBytes())
+                    }
+                }
+                analyzeRawAudio(
+                    audioFile.samples,
+                    audioFile.sampleRate,
+                    channelCount = audioFile.channelCount
+                ) { result ->
+                    displayAnalysisResult(result)
+                    tvConfidenceScores.append("\nDemo reference label: $expectedLabel")
+                    progressBar.visibility = View.GONE
+                    btnTestRealSample.isEnabled = true
+                    btnTestFakeSample.isEnabled = true
+                    btnAnalyzeFile.isEnabled = selectedAudioUri != null
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Error analyzing bundled $expectedLabel demo sample")
+                Toast.makeText(
+                    this@MainActivity,
+                    "Demo sample error: ${e.message}",
+                    Toast.LENGTH_LONG
+                ).show()
+                progressBar.visibility = View.GONE
+                btnTestRealSample.isEnabled = true
+                btnTestFakeSample.isEnabled = true
+                btnAnalyzeFile.isEnabled = selectedAudioUri != null
             }
         }
     }

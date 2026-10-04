@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title description">
+  <title id="title">KNN deepfake audio detection workflow</title>
+  <desc id="description">A KNN model is trained from 25 audio features, exported to ONNX with its RobustScaler, and run on Android call audio to display fake and real probabilities.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#52657a"/>
+    </marker>
+    <style>
+      text { font-family: "Segoe UI", Arial, sans-serif; fill: #172b4d; }
+      .title { font-size: 30px; font-weight: 700; }
+      .subtitle { font-size: 15px; fill: #52657a; }
+      .lane-title { font-size: 20px; font-weight: 700; }
+      .box-title { font-size: 17px; font-weight: 700; }
+      .body { font-size: 14px; fill: #344563; }
+      .small { font-size: 12px; fill: #52657a; }
+      .box { fill: #ffffff; stroke: #7b8da6; stroke-width: 2; }
+      .arrow { fill: none; stroke: #52657a; stroke-width: 2.5; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect width="1200" height="760" fill="#f5f7fa"/>
+  <text x="600" y="48" text-anchor="middle" class="title">KNN Deepfake Audio Detection Workflow</text>
+  <text x="600" y="76" text-anchor="middle" class="subtitle">Model training and on-device Android inference</text>
+
+  <rect x="36" y="105" width="1128" height="270" rx="20" fill="#eef5ff" stroke="#6b9de0" stroke-width="2"/>
+  <text x="64" y="140" class="lane-title">1. Train and export the KNN model</text>
+
+  <rect x="68" y="180" width="220" height="132" rx="14" class="box"/>
+  <text x="178" y="214" text-anchor="middle" class="box-title">Labeled audio features</text>
+  <text x="178" y="244" text-anchor="middle" class="body">25 features per sample</text>
+  <text x="178" y="268" text-anchor="middle" class="body">plus real/fake label</text>
+  <text x="178" y="291" text-anchor="middle" class="small">CSV training dataset</text>
+
+  <path d="M288 246 H338" class="arrow"/>
+
+  <rect x="350" y="180" width="205" height="132" rx="14" class="box"/>
+  <text x="452" y="214" text-anchor="middle" class="box-title">Fit and evaluate</text>
+  <text x="452" y="244" text-anchor="middle" class="body">Select KNN settings</text>
+  <text x="452" y="268" text-anchor="middle" class="body">Evaluate on held-out data</text>
+  <text x="452" y="291" text-anchor="middle" class="small">96.03% on one fixed split</text>
+
+  <path d="M555 246 H605" class="arrow"/>
+
+  <rect x="617" y="180" width="230" height="132" rx="14" fill="#fff8e6" stroke="#d9a441" stroke-width="2"/>
+  <text x="732" y="214" text-anchor="middle" class="box-title">RobustScaler + KNN</text>
+  <text x="732" y="244" text-anchor="middle" class="body">k = 3 · cosine distance</text>
+  <text x="732" y="268" text-anchor="middle" class="body">uniform neighbor weights</text>
+  <text x="732" y="291" text-anchor="middle" class="small">Binary real/fake classifier</text>
+
+  <path d="M847 246 H897" class="arrow"/>
+
+  <rect x="909" y="180" width="220" height="132" rx="14" fill="#e8f7f0" stroke="#48a57b" stroke-width="2"/>
+  <text x="1019" y="214" text-anchor="middle" class="box-title">Export ONNX</text>
+  <text x="1019" y="244" text-anchor="middle" class="body">Scaler embedded in model</text>
+  <text x="1019" y="268" text-anchor="middle" class="body">knn_modelv2.onnx</text>
+  <text x="1019" y="291" text-anchor="middle" class="small">Bundled in Android app</text>
+
+  <rect x="36" y="408" width="1128" height="284" rx="20" fill="#eefaf5" stroke="#54aa83" stroke-width="2"/>
+  <text x="64" y="444" class="lane-title">2. Analyze call audio on Android</text>
+
+  <rect x="68" y="490" width="190" height="134" rx="14" class="box"/>
+  <text x="163" y="524" text-anchor="middle" class="box-title">Live call audio</text>
+  <text x="163" y="554" text-anchor="middle" class="body">Built-in microphone</text>
+  <text x="163" y="578" text-anchor="middle" class="body">speakerphone intended</text>
+  <text x="163" y="602" text-anchor="middle" class="small">Capture is device/OS-limited</text>
+
+  <path d="M258 557 H298" class="arrow"/>
+
+  <rect x="310" y="490" width="225" height="134" rx="14" class="box"/>
+  <text x="422" y="524" text-anchor="middle" class="box-title">Extract 25 features</text>
+  <text x="422" y="554" text-anchor="middle" class="body">RMS, spectral statistics,</text>
+  <text x="422" y="578" text-anchor="middle" class="body">zero-crossing rate, 20 MFCCs</text>
+  <text x="422" y="602" text-anchor="middle" class="small">Per audio chunk</text>
+
+  <path d="M535 557 H575" class="arrow"/>
+
+  <rect x="587" y="490" width="225" height="134" rx="14" fill="#e8f7f0" stroke="#48a57b" stroke-width="2"/>
+  <text x="699" y="524" text-anchor="middle" class="box-title">ONNX Runtime</text>
+  <text x="699" y="554" text-anchor="middle" class="body">Runs bundled KNN model</text>
+  <text x="699" y="578" text-anchor="middle" class="body">and embedded scaler</text>
+  <text x="699" y="602" text-anchor="middle" class="small">Local inference on device</text>
+
+  <path d="M812 557 H852" class="arrow"/>
+
+  <rect x="864" y="490" width="265" height="134" rx="14" class="box"/>
+  <text x="996" y="524" text-anchor="middle" class="box-title">Detection results</text>
+  <text x="996" y="554" text-anchor="middle" class="body">Fake probability · Real probability</text>
+  <text x="996" y="578" text-anchor="middle" class="body">Displayed in app and overlay</text>
+  <text x="996" y="602" text-anchor="middle" class="small">Experimental live-audio estimate</text>
+
+  <path d="M1019 312 V391 H699 V478" class="arrow"/>
+
+  <text x="600" y="727" text-anchor="middle" class="small">The held-out CSV score does not establish accuracy on live calls; Android feature extraction may differ from training.</text>
+</svg>
