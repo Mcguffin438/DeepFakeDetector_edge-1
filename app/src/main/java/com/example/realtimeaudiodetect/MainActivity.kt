@@ -432,18 +432,30 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     }
 
     private fun displayLiveDetectionResult(result: RealTimeAudioDetectionService.DetectionResult) {
-        val fakePercent = (result.confidence * 100).toInt()
-        val realPercent = ((1f - result.confidence) * 100).toInt()
+        val knnFakePercent = (result.confidence * 100).toInt()
+        val knnRealPercent = ((1f - result.confidence) * 100).toInt()
         layoutAnalysisResults.visibility = View.VISIBLE
-        tvAnalysisResult.text = if (result.isFake) "LIVE CALL: POSSIBLE DEEPFAKE" else "LIVE CALL: LIKELY REAL"
+        val lgbmFake = result.lgbmFakeConfidence
+        val lgbmIsFake = lgbmFake?.let { it > 0.5f }
+        tvAnalysisResult.text = when {
+            lgbmIsFake == null ->
+                if (result.isFake) "LIVE CALL: KNN FLAGS FAKE" else "LIVE CALL: KNN FLAGS REAL"
+            result.isFake && lgbmIsFake -> "LIVE CALL: BOTH MODELS FLAG FAKE"
+            !result.isFake && !lgbmIsFake -> "LIVE CALL: BOTH MODELS FLAG REAL"
+            else -> "LIVE CALL: MODELS DISAGREE"
+        }
         tvAnalysisResult.setTextColor(
             ContextCompat.getColor(
                 this,
-                if (result.isFake) R.color.error_color else R.color.success_color
+                if (result.isFake || lgbmIsFake == true) R.color.error_color else R.color.success_color
             )
         )
+        val lgbmScoreLine = lgbmFake?.let {
+            val fakePercent = (it * 100).toInt()
+            "LightGBM: fake $fakePercent% | real ${100 - fakePercent}%\n"
+        }.orEmpty()
         tvConfidenceScores.text =
-            "Fake probability: $fakePercent% | Real probability: $realPercent%\n${result.warning.orEmpty()}"
+            "KNN: fake $knnFakePercent% | real $knnRealPercent%\n$lgbmScoreLine${result.warning.orEmpty()}"
     }
     
     private fun startPulseAnimation(colorRes: Int) {
@@ -734,16 +746,35 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
             tvConfidenceScores.text = result.error
         } else {
             if (result.isFake) {
-                tvAnalysisResult.text = "DEEPFAKE DETECTED"
+                tvAnalysisResult.text = if (result.lgbmFakeConfidence != null) {
+                    if (result.lgbmFakeConfidence > 0.5f) "BOTH MODELS FLAG FAKE" else "MODELS DISAGREE"
+                } else {
+                    "KNN FLAGS FAKE"
+                }
                 tvAnalysisResult.setTextColor(ContextCompat.getColor(this, R.color.error_color))
             } else {
-                tvAnalysisResult.text = "Real Audio"
-                tvAnalysisResult.setTextColor(ContextCompat.getColor(this, R.color.success_color))
+                tvAnalysisResult.text = if (result.lgbmFakeConfidence != null) {
+                    if (result.lgbmFakeConfidence > 0.5f) "MODELS DISAGREE" else "BOTH MODELS FLAG REAL"
+                } else {
+                    "KNN FLAGS REAL"
+                }
+                val anyModelFlagsFake = result.lgbmFakeConfidence?.let { it > 0.5f } == true
+                tvAnalysisResult.setTextColor(
+                    ContextCompat.getColor(
+                        this,
+                        if (anyModelFlagsFake) R.color.error_color else R.color.success_color
+                    )
+                )
             }
             val fakePercent = (result.fakeConfidence * 100).toInt()
             val realPercent = (result.realConfidence * 100).toInt()
             val warning = result.warning?.let { "\n$it" }.orEmpty()
-            tvConfidenceScores.text = "Fake probability: $fakePercent% | Real probability: $realPercent%$warning"
+            val lgbmScoreLine = result.lgbmFakeConfidence?.let {
+                val lgbmFakePercent = (it * 100).toInt()
+                "LightGBM: fake $lgbmFakePercent% | real ${100 - lgbmFakePercent}%\n"
+            }.orEmpty()
+            tvConfidenceScores.text =
+                "KNN: fake $fakePercent% | real $realPercent%\n$lgbmScoreLine$warning"
         }
     }
     

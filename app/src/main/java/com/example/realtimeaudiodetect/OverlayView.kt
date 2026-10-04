@@ -122,26 +122,33 @@ class OverlayView @JvmOverloads constructor(
     private fun drawProbabilityScores(canvas: Canvas, width: Float) {
         val result = currentResult ?: return
         val centerX = width / 2f
-        val fakePercent = (result.confidence * 100).toInt()
-        val realPercent = ((1f - result.confidence) * 100).toInt()
-        detailPaint.textSize = 25f
+        val knnFakePercent = (result.confidence * 100).toInt()
+        val knnRealPercent = ((1f - result.confidence) * 100).toInt()
+        detailPaint.textSize = 20f
         detailPaint.color = Color.WHITE
-        canvas.drawText("Fake probability: $fakePercent%", centerX, 142f, detailPaint)
-        canvas.drawText("Real probability: $realPercent%", centerX, 174f, detailPaint)
+        canvas.drawText("KNN F: $knnFakePercent% / R: $knnRealPercent%", centerX, 142f, detailPaint)
+        result.lgbmFakeConfidence?.let {
+            val fakePercent = (it * 100).toInt()
+            canvas.drawText("LGBM F: $fakePercent% / R: ${100 - fakePercent}%", centerX, 174f, detailPaint)
+        }
         detailPaint.textSize = 32f
     }
     
     private fun drawMainStatus(canvas: Canvas, width: Float, height: Float) {
         val centerX = width / 2f
         val statusY = padding + 60f
-        
+
+        val result = currentResult
+        val lgbmFake = result?.lgbmFakeConfidence?.let { it > 0.5f }
         val (statusText, statusColor) = when {
             isAnalyzing -> "🔍 ANALYZING" to colorYellow
-            currentResult == null -> "⏳ WAITING" to colorGray
-            currentResult!!.isFake && currentResult!!.confidence > CONFIDENCE_THRESHOLD -> 
-                "⚠️ DEEPFAKE" to colorRed
-            currentResult!!.isFake -> "⚠️ SUSPICIOUS" to colorYellow
-            else -> "✅ AUTHENTIC" to colorGreen
+            result == null -> "⏳ WAITING" to colorGray
+            lgbmFake != null && result.isFake != lgbmFake -> "⚠️ DISAGREE" to colorYellow
+            result.isFake && result.confidence > CONFIDENCE_THRESHOLD ->
+                "⚠️ BOTH FLAG FAKE" to colorRed
+            result.isFake -> "⚠️ BOTH SUSPICIOUS" to colorYellow
+            lgbmFake != null -> "✅ BOTH FLAG REAL" to colorGreen
+            else -> "✅ KNN FLAGS REAL" to colorGreen
         }
         
         // Apply pulse effect
@@ -204,7 +211,7 @@ class OverlayView @JvmOverloads constructor(
             currentResult == null -> "Waiting for audio data..."
             else -> {
                 val samples = detectionHistory.size
-                "Experimental KNN • Samples: $samples"
+                "Experimental KNN + LGBM • Samples: $samples"
             }
         }
 

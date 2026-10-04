@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title description">
-  <title id="title">KNN deepfake audio detection workflow</title>
-  <desc id="description">A KNN model is trained from 25 audio features, exported to ONNX with its RobustScaler, and run on Android call audio to display fake and real probabilities.</desc>
+  <title id="title">KNN and LightGBM deepfake audio detection workflow</title>
+  <desc id="description">KNN and LightGBM ONNX models run locally on one-second Android call audio chunks and display separate fake and real probabilities.</desc>
   <defs>
     <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
       <path d="M0,0 L10,5 L0,10 Z" fill="#52657a"/>
@@ -19,8 +19,8 @@
   </defs>
 
   <rect width="1200" height="760" fill="#f5f7fa"/>
-  <text x="600" y="48" text-anchor="middle" class="title">KNN Deepfake Audio Detection Workflow</text>
-  <text x="600" y="76" text-anchor="middle" class="subtitle">Model training and on-device Android inference</text>
+  <text x="600" y="48" text-anchor="middle" class="title">KNN + LightGBM Audio Detection Workflow</text>
+  <text x="600" y="76" text-anchor="middle" class="subtitle">KNN training and dual-model on-device Android inference</text>
 
   <rect x="36" y="105" width="1128" height="270" rx="20" fill="#eef5ff" stroke="#6b9de0" stroke-width="2"/>
   <text x="64" y="140" class="lane-title">1. Train and export the KNN model</text>
@@ -56,7 +56,7 @@
   <text x="1019" y="291" text-anchor="middle" class="small">Bundled in Android app</text>
 
   <rect x="36" y="408" width="1128" height="284" rx="20" fill="#eefaf5" stroke="#54aa83" stroke-width="2"/>
-  <text x="64" y="444" class="lane-title">2. Analyze call audio on Android</text>
+  <text x="64" y="444" class="lane-title">2. Analyze call audio with both models on Android</text>
 
   <rect x="68" y="490" width="190" height="134" rx="14" class="box"/>
   <text x="163" y="524" text-anchor="middle" class="box-title">Live call audio</text>
@@ -67,24 +67,24 @@
   <path d="M258 557 H298" class="arrow"/>
 
   <rect x="310" y="490" width="225" height="134" rx="14" class="box"/>
-  <text x="422" y="524" text-anchor="middle" class="box-title">Extract 25 features</text>
-  <text x="422" y="554" text-anchor="middle" class="body">RMS, spectral statistics,</text>
-  <text x="422" y="578" text-anchor="middle" class="body">zero-crossing rate, 20 MFCCs</text>
-  <text x="422" y="602" text-anchor="middle" class="small">Per audio chunk</text>
+  <text x="422" y="524" text-anchor="middle" class="box-title">Extract model features</text>
+  <text x="422" y="554" text-anchor="middle" class="body">25 KNN features +</text>
+  <text x="422" y="578" text-anchor="middle" class="body">approx. chroma for LightGBM</text>
+  <text x="422" y="602" text-anchor="middle" class="small">Per one-second chunk</text>
 
   <path d="M535 557 H575" class="arrow"/>
 
   <rect x="587" y="490" width="225" height="134" rx="14" fill="#e8f7f0" stroke="#48a57b" stroke-width="2"/>
   <text x="699" y="524" text-anchor="middle" class="box-title">ONNX Runtime</text>
-  <text x="699" y="554" text-anchor="middle" class="body">Runs bundled KNN model</text>
-  <text x="699" y="578" text-anchor="middle" class="body">and embedded scaler</text>
-  <text x="699" y="602" text-anchor="middle" class="small">Local inference on device</text>
+  <text x="699" y="554" text-anchor="middle" class="body">Runs KNN + LightGBM</text>
+  <text x="699" y="578" text-anchor="middle" class="body">ONNX models locally</text>
+  <text x="699" y="602" text-anchor="middle" class="small">CPU inference supported</text>
 
   <path d="M812 557 H852" class="arrow"/>
 
   <rect x="864" y="490" width="265" height="134" rx="14" class="box"/>
   <text x="996" y="524" text-anchor="middle" class="box-title">Detection results</text>
-  <text x="996" y="554" text-anchor="middle" class="body">Fake probability · Real probability</text>
+  <text x="996" y="554" text-anchor="middle" class="body">Separate scores + agreement</text>
   <text x="996" y="578" text-anchor="middle" class="body">Displayed in app and overlay</text>
   <text x="996" y="602" text-anchor="middle" class="small">Experimental live-audio estimate</text>
 

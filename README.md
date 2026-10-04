@@ -1,8 +1,8 @@
 # RealTimeAudioDetect - Real-time Deepfake Audio Detection
 
-A real-time Android deepfake-audio detection app that runs a KNN classifier locally with ONNX Runtime. The app extracts 25 audio features and feeds them to the bundled `knn_modelv2.onnx` model, which includes its RobustScaler.
+A real-time Android deepfake-audio detection app that runs KNN and LightGBM classifiers locally with ONNX Runtime. It displays the models' separate fake/real scores and whether their predictions agree.
 
-![KNN deepfake audio detection workflow](images/deepfake_edge_workflow.svg)
+![KNN and LightGBM deepfake audio detection workflow](images/deepfake_edge_workflow.svg)
 
 ## Table of Contents
 - [Overview](#overview)
@@ -21,45 +21,50 @@ A real-time Android deepfake-audio detection app that runs a KNN classifier loca
 This project implements a complete pipeline for edge-deployed deepfake detection, from feature extraction to real-time inference.
 
 **Feature Extraction Process:**
-- 25 features per live audio chunk: RMS, spectral centroid, bandwidth, rolloff, zero-crossing rate, and 20 MFCC means
+- 25 KNN features per live audio chunk: RMS, spectral centroid, bandwidth, rolloff, zero-crossing rate, and 20 MFCC means
+- 26 LightGBM inputs: an Android-estimated chroma feature followed by the same 25 features
 - Audio is processed at 16 kHz; call monitoring uses chunks from the built-in microphone and is intended for speakerphone use
 - Live monitoring collects one-second chunks and makes a new prediction once per second
-- Features are passed to the KNN model in the training feature order
+- Each model receives features in its respective training column order
 
-**Model Training & Deployment:**
-- ONNX input shape: `[batch, 25]`
-- KNN classifier with embedded RobustScaler, 15 neighbors, Euclidean distance, and distance weighting
-- ONNX model outputs the class label and class probabilities
+**Model Deployment:**
+- KNN ONNX input shape: `[batch, 25]`; RobustScaler is embedded in the graph
+- LightGBM ONNX input shape: `[batch, 26]`; fake is class 0, while the KNN model's fake class is class 1
+- Each ONNX model outputs class probabilities; their scores are shown separately
 - ONNX Runtime uses available execution providers with fallback; CPU inference is supported
 
 **Edge Integration:**
 - Android foreground service with automatic call detection
-- Real-time visual overlay and fake/real probability scores
+- Real-time visual overlay, separate fake/real scores, and model agreement status
 - 100% local processing - no network connectivity required
 - Privacy-first design with in-memory audio processing
 
 ## Features
 
-- **Audio Features**: 25-dimensional feature vector for the bundled KNN
+- **Audio Features**: 25-dimensional KNN and 26-dimensional LightGBM feature vectors
 - **Edge Deployment**: ONNX Runtime with CPU fallback
 - **Real-Time Alerts**: Visual overlay with confidence-based threat detection
 - **Auto-Activation**: Foreground service monitors calls automatically
 - **Privacy-First**: 100% local processing, no data transmission
-- **Model**: `app/src/main/assets/models/knn_modelv2.onnx`
+- **Models**: `app/src/main/assets/models/knn_modelv2.onnx` and `lgbmv2.onnx`
 
 ## Key Technical Achievements
 
 **Model and evaluation:**
-- Audio processing: 25 KNN input features per chunk
+- Audio processing: 25 KNN and 26 LightGBM input features per chunk
 - The bundled KNN is trained on one-second clips from Gary Stafford's CC BY 4.0 dataset, with RobustScaler embedded in the ONNX graph
 - Nested, source-grouped five-fold evaluation on that dataset: 81.94% accuracy and 85.85% fake recall; this is not a live-call benchmark
 - Evaluation groups keep clips from the same source recording/voice together, but do not hold out entire synthetic generator platforms
+- The LightGBM model is bundled from `lgbmv2.onnx`; its original notebook used 26 features and reported a random-split score, which is not evidence of Android or live-call accuracy
+- Android's chroma feature is an approximation and has not been verified against the LightGBM training feature extractor
+- Cross-dataset experiment on all 1,866 clips in Gary Stafford dataset v4, using a Python port of the Android one-second feature pipeline: 41.48% accuracy on the first complete second per clip (62.81% fake recall, 20.15% real recall); 39.17% accuracy across all 6,847 complete one-second chunks. This is an offline experiment, not a device benchmark
 - One-second live predictions have not been validated on phone hardware; Android call capture and acoustics may reduce reliability
 
 **Architecture Highlights:**
-- KNN model input: `[batch, 25]`
+- KNN model input: `[batch, 25]`; fake class index 1
 - KNN configuration: 15 neighbors, Euclidean distance, distance weighting
-- Alert system: fake/real probability scores with experimental warnings
+- LightGBM model input: `[batch, 26]`; fake class index 0
+- Alert system: separate fake/real probability scores with experimental warnings
 
 ## Prerequisites
 
@@ -87,12 +92,13 @@ Required permissions:
 1. **Auto-Activation**: Service starts automatically during phone calls
 2. **Visual Alerts**: Real-time overlay shows detection status:
    - 🔍 **Yellow**: Analyzing audio chunks
-   - ✅ **Green**: Authentic speech detected
-   - ⚠️ **Red**: High-confidence deepfake (>90%)
+   - ✅ **Green**: Both models flag the chunk as real
+   - ⚠️ **Yellow**: Models disagree or KNN confidence is below its alert threshold
+   - ⚠️ **Red**: Both models flag fake (the overlay uses a 70% KNN threshold)
 3. **Privacy**: All processing occurs locally, no data transmission
 
 ### Bundled Demo Audio
-Use **Test real sample** or **Test fake sample** in the Tools section to run the included speech clips through the KNN model. The reference labels identify the dataset classes; predictions may not match them and are not an accuracy test. These two clips are small examples from [Gary Stafford's Deepfake Audio Detection Dataset v4](https://huggingface.co/datasets/garystafford/deepfake-audio-detection), not the full dataset. The source dataset contains 1,866 clips total: 933 real and 933 synthetic. Its synthetic audio is attributed to these text-to-speech platforms:
+Use **Test real sample** or **Test fake sample** in the Tools section to run the included speech clips through both models. The reference labels identify the dataset classes; predictions may not match them and are not an accuracy test. These two clips are small examples from [Gary Stafford's Deepfake Audio Detection Dataset v4](https://huggingface.co/datasets/garystafford/deepfake-audio-detection), not the full dataset. The source dataset contains 1,866 clips total: 933 real and 933 synthetic. Its synthetic audio is attributed to these text-to-speech platforms:
 
 | Synthetic audio source | Clips |
 |---|---:|
@@ -108,16 +114,16 @@ The app bundles only one synthetic example: `demo_fake.wav`, sourced from `fake/
 
 ### Example Detection Flow
 ```kotlin
-// The service extracts the model's 25 features, creates a [1, 25] ONNX tensor,
-// and reads class probabilities through ONNX Runtime.
+// The service extracts features for both models and reports separate scores.
 val result = service.analyzeRawAudio(audioData, SAMPLE_RATE)
 val fakeProbability = result.fakeConfidence
+val lightgbmFakeProbability = result.lgbmFakeConfidence
 ```
 
 ## Core Components
 
 ### Audio Processing
-- **AudioProcessor**: KNN feature extraction (five spectral/time-domain statistics plus 20 MFCC means)
+- **AudioProcessor**: Shared KNN/LightGBM feature extraction, including an experimental chroma estimate
 - **RealTimeAudioDetectionService**: ONNX Runtime inference, call-audio monitoring, and provider fallback
 - **PhoneStateReceiver**: Automatic call detection and service activation
 
@@ -126,8 +132,8 @@ val fakeProbability = result.fakeConfidence
 - **MainActivity**: App configuration and monitoring controls
 
 ### Model Integration
-- **ONNX Runtime**: Loads the bundled `knn_modelv2.onnx`, whose graph includes RobustScaler and KNN
-- **Feature Pipeline**: 16 kHz call audio → one-second chunks → 25 features → ONNX KNN inference → fake/real probabilities
+- **ONNX Runtime**: Loads bundled `knn_modelv2.onnx` and `lgbmv2.onnx`
+- **Feature Pipeline**: 16 kHz call audio → one-second chunks → 25/26 model-specific features → separate ONNX inference → fake/real probabilities
 
 ## Project Structure
 
@@ -135,11 +141,11 @@ val fakeProbability = result.fakeConfidence
 DeepFakeDetector_edge/
 ├── app/src/main/
 │   ├── java/com/example/realtimeaudiodetect/
-│   │   ├── AudioProcessor.kt           # KNN audio feature extraction
+│   │   ├── AudioProcessor.kt           # Audio feature extraction
 │   │   ├── RealTimeAudioDetectionService.kt # Edge deployment service
 │   │   ├── OverlayView.kt             # Real-time visual alerts
 │   │   └── PhoneStateReceiver.kt      # Call detection
-│   ├── assets/models/                 # ONNX models
+│   ├── assets/models/                 # KNN and LightGBM ONNX models
 │   ├── assets/samples/audio/          # Attributed real/fake demo WAV files
 │   └── AndroidManifest.xml           # Permissions and services
 ├── notebooks/                         # Training notebooks
@@ -149,9 +155,11 @@ DeepFakeDetector_edge/
 ## Development
 
 ### Model Requirements
-- **Model**: `app/src/main/assets/models/knn_modelv2.onnx`
-- **Input Shape**: `[batch, 25]`
-- **Input Features**: RMS, spectral centroid, bandwidth, rolloff, zero-crossing rate, followed by 20 MFCC means
+- **KNN Model**: `app/src/main/assets/models/knn_modelv2.onnx`
+- **KNN Input Shape**: `[batch, 25]`
+- **KNN Input Features**: RMS, spectral centroid, bandwidth, rolloff, zero-crossing rate, followed by 20 MFCC means
+- **LightGBM Model**: `app/src/main/assets/models/lgbmv2.onnx`, input shape `[batch, 26]`
+- **LightGBM Input Features**: estimated chroma_stft followed by the 25 KNN features; this Android chroma is approximate
 - **Audio Format**: 16 kHz mono or stereo PCM; live call inference uses one-second windows
 - **Outputs**: Predicted class and class probabilities
 
@@ -165,7 +173,7 @@ python notebooks/DeepFakeDetector/train_knn_1s.py --dataset-root path/to/dataset
 The script selects KNN settings with source-grouped cross-validation, fits the selected RobustScaler/KNN pipeline on all one-second clips, and exports the ONNX model to the app assets by default. The dataset is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); attribution is recorded in `app/src/main/assets/samples/audio/ATTRIBUTION.txt`.
 
 ### Adding New Features
-1. Keep feature extraction in `AudioProcessor.kt` aligned with the model’s training feature order and scaling.
+1. Keep feature extraction in `AudioProcessor.kt` aligned with each model’s training feature order and scaling.
 2. Update model input/output handling in `RealTimeAudioDetectionService.kt` if the ONNX interface changes.
 3. Update the displayed probabilities in `MainActivity.kt` and `OverlayView.kt` as needed.
 

@@ -24,7 +24,8 @@ data class MultiChannelFeaturesResult(
 
 data class KnnFeatureResult(
     val features: FloatArray,
-    val error: String? = null
+    val error: String? = null,
+    val chromaStft: Float = 0f
 )
 
 class AudioProcessor {
@@ -229,6 +230,7 @@ class AudioProcessor {
         val stft = computeSTFT(waveform)
         val mfcc = applyDCT(convertToDb(applyMelFilterBank(stft)), NUM_FEATURE_BINS)
         val values = FloatArray(25)
+        val chroma = FloatArray(12)
         var rms = 0.0
         var centroid = 0.0
         var bandwidth = 0.0
@@ -273,6 +275,20 @@ class AudioProcessor {
             }
             bandwidth += if (energySum > 0.0) sqrt(variance / energySum) else 0.0
             rolloff += frameRolloff
+
+            val frameChroma = FloatArray(chroma.size)
+            for (bin in 1 until stft[frame].size) {
+                val frequency = bin.toDouble() * sampleRate / FFT_SIZE
+                val midiNote = 69.0 + 12.0 * ln(frequency / 440.0) / ln(2.0)
+                val pitchClass = Math.floorMod(midiNote.roundToInt(), chroma.size)
+                frameChroma[pitchClass] += stft[frame][bin]
+            }
+            val maxChroma = frameChroma.maxOrNull() ?: 0f
+            if (maxChroma > 0f) {
+                for (pitch in chroma.indices) {
+                    chroma[pitch] += frameChroma[pitch] / maxChroma
+                }
+            }
         }
 
         val frameCount = stft.size.coerceAtLeast(1)
@@ -282,9 +298,10 @@ class AudioProcessor {
         values[3] = (rolloff / frameCount).toFloat()
         values[4] = (zeroCrossing / frameCount).toFloat()
         for (i in 0 until 20) values[5 + i] = mfcc[i].average().toFloat()
+        val chromaMean = chroma.average().toFloat() / frameCount
 
-        return if (values.all(Float::isFinite)) {
-            KnnFeatureResult(values)
+        return if (values.all(Float::isFinite) && chromaMean.isFinite()) {
+            KnnFeatureResult(values, chromaStft = chromaMean)
         } else {
             KnnFeatureResult(floatArrayOf(), "Feature extraction produced non-finite values")
         }

@@ -53,8 +53,9 @@ class RealTimeAudioDetectionService : Service() {
         private const val AUDIO_CHUNK_DURATION_MS = 1000
         private const val OVERLAP_DURATION_MS = 0
         private const val KNN_FEATURE_COUNT = 25
+        private const val LGBM_FEATURE_COUNT = 26
         const val MODEL_WARNING =
-            "Experimental: one-second live predictions are unvalidated and Android features may differ from training."
+            "Experimental: both models' one-second live predictions are unvalidated; Android features may differ from training."
 
         @Volatile
         var isActive = false
@@ -83,6 +84,7 @@ class RealTimeAudioDetectionService : Service() {
     // ONNX ML inference
     private var ortEnv: OrtEnvironment? = null
     private var ortSession: OrtSession? = null
+    private var lgbmSession: OrtSession? = null
     private var isModelLoaded = AtomicBoolean(false)
     private val audioProcessor = AudioProcessor()
     private var pendingStartIntent: Intent? = null
@@ -120,6 +122,7 @@ class RealTimeAudioDetectionService : Service() {
         val timestamp: Long,
         val isFake: Boolean,
         val confidence: Float,
+        val lgbmFakeConfidence: Float? = null,
         val audioChunkId: Int = -1,
         val processingTimeMs: Long = 0L,
         val warning: String? = MODEL_WARNING
@@ -132,6 +135,8 @@ class RealTimeAudioDetectionService : Service() {
         val realConfidence: Float,
         val processingTimeMs: Long,
         val audioLengthMs: Long,
+        val lgbmFakeConfidence: Float? = null,
+        val lgbmRealConfidence: Float? = null,
         val error: String? = null,
         val warning: String? = MODEL_WARNING
     )
@@ -189,7 +194,7 @@ class RealTimeAudioDetectionService : Service() {
         currentPhoneNumber = intent.getStringExtra(EXTRA_PHONE_NUMBER)
         isIncomingCall = intent.getBooleanExtra(EXTRA_IS_INCOMING, false)
 
-        if (!isModelLoaded.get() || ortSession == null) {
+        if (!isModelLoaded.get() || ortSession == null || lgbmSession == null) {
             pendingStartIntent = intent
             handlePrepare(intent)
             return
@@ -202,7 +207,7 @@ class RealTimeAudioDetectionService : Service() {
     private fun startDetectionSession() {
         if (isStopping.get()) return
         pendingStartIntent = null
-        startForeground(NOTIFICATION_ID, createNotification("Monitoring speakerphone audio - experimental KNN"))
+        startForeground(NOTIFICATION_ID, createNotification("Monitoring speakerphone audio - experimental KNN + LightGBM"))
         showOverlay()
         startAudioMonitoring()
     }
@@ -226,20 +231,29 @@ class RealTimeAudioDetectionService : Service() {
     
     private fun loadDeepfakeModel() {
         try {
-            val modelFile = getModelFile()
-            if (!modelFile.exists()) {
-                Timber.e("Model file not found: ${modelFile.absolutePath}")
+            val knnModelFile = getModelFile("knn_modelv2.onnx")
+            val lgbmModelFile = getModelFile("lgbmv2.onnx")
+            if (!knnModelFile.exists() || !lgbmModelFile.exists()) {
+                Timber.e("KNN or LightGBM ONNX model file is missing")
                 isModelLoaded.set(false)
                 return
             }
 
             ortEnv = OrtEnvironment.getEnvironment()
-            val loadedSession = createSessionWithProviderFallbacks(modelFile)
+            val loadedKnnSession = createSessionWithProviderFallbacks(knnModelFile)
+            val loadedLgbmSession = try {
+                createSessionWithProviderFallbacks(lgbmModelFile)
+            } catch (e: Exception) {
+                loadedKnnSession.close()
+                throw e
+            }
             if (isStopping.get()) {
-                loadedSession.close()
+                loadedKnnSession.close()
+                loadedLgbmSession.close()
                 return
             }
-            ortSession = loadedSession
+            ortSession = loadedKnnSession
+            lgbmSession = loadedLgbmSession
             isModelLoaded.set(true)
 
             val queuedIntent = pendingStartIntent
@@ -264,17 +278,21 @@ class RealTimeAudioDetectionService : Service() {
                 }
             }
 
-            Timber.i("✅ ONNX model loaded successfully: ${modelFile.name}")
+            Timber.i("ONNX KNN and LightGBM models loaded successfully")
 
             serviceScope.launch(Dispatchers.Main) {
                 if (isStopping.get()) return@launch
-                val notification = createNotification("Model loaded - Experimental KNN results")
+                val notification = createNotification("KNN + LightGBM models loaded - experimental results")
                 val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
                 notificationManager.notify(NOTIFICATION_ID, notification)
             }
 
         } catch (e: Exception) {
-            Timber.e(e, "❌ Failed to load ONNX model")
+            Timber.e(e, "Failed to load ONNX models")
+            ortSession?.close()
+            lgbmSession?.close()
+            ortSession = null
+            lgbmSession = null
             isModelLoaded.set(false)
             serviceScope.launch(Dispatchers.Main) {
                 if (isStopping.get()) return@launch
@@ -320,22 +338,23 @@ class RealTimeAudioDetectionService : Service() {
         throw lastError ?: IllegalStateException("Unable to create ONNX Runtime session")
     }
     
-    private fun getModelFile(): File {
-        val assetsModelFile = File(filesDir, "knn_modelv2.onnx")
-        if (!assetsModelFile.exists() || assetsModelFile.length() == 0L) {
-            val temporaryFile = File(filesDir, "knn_modelv2.onnx.tmp")
-            try {
-                assets.open("models/knn_modelv2.onnx").use { input ->
-                    FileOutputStream(temporaryFile).use { output -> input.copyTo(output) }
-                }
-                if (!temporaryFile.renameTo(assetsModelFile)) {
-                    throw IOException("Unable to move copied model into place")
-                }
-                Timber.i("Model copied to: ${assetsModelFile.absolutePath}")
-            } catch (e: Exception) {
-                temporaryFile.delete()
-                throw IOException("Failed to copy ONNX model from assets", e)
+    private fun getModelFile(modelName: String): File {
+        val assetsModelFile = File(filesDir, modelName)
+        val temporaryFile = File(filesDir, "$modelName.tmp")
+        try {
+            assets.open("models/$modelName").use { input ->
+                FileOutputStream(temporaryFile).use { output -> input.copyTo(output) }
             }
+            if (assetsModelFile.exists() && !assetsModelFile.delete()) {
+                throw IOException("Unable to replace cached model: ${assetsModelFile.absolutePath}")
+            }
+            if (!temporaryFile.renameTo(assetsModelFile)) {
+                throw IOException("Unable to move copied model into place")
+            }
+            Timber.i("Model copied to: ${assetsModelFile.absolutePath}")
+        } catch (e: Exception) {
+            temporaryFile.delete()
+            throw IOException("Failed to copy ONNX model from assets: $modelName", e)
         }
         return assetsModelFile
     }
@@ -548,40 +567,53 @@ class RealTimeAudioDetectionService : Service() {
         }
     }
     
-    private fun buildOnnxInputTensor(features: FloatArray): OnnxTensor {
-        val session = ortSession ?: throw IllegalStateException("ONNX session is not loaded")
+    private fun buildOnnxInputTensor(
+        features: FloatArray,
+        session: OrtSession,
+        expectedFeatureCount: Int,
+        modelName: String
+    ): OnnxTensor {
         val inputInfo = session.inputInfo
         if (inputInfo.size != 1) {
-            throw IllegalStateException("Expected one model input, found ${inputInfo.size}")
+            throw IllegalStateException("$modelName expects one model input, found ${inputInfo.size}")
         }
         val tensorInfo = inputInfo.values.first().info as? TensorInfo
-            ?: throw IllegalStateException("Model input is not a tensor")
+            ?: throw IllegalStateException("$modelName input is not a tensor")
         val declaredShape = tensorInfo.shape
         val env = ortEnv ?: throw IllegalStateException("ONNX Runtime environment is not initialized")
         require(declaredShape.size == 2) {
-            "Expected the exported KNN model input to have rank 2, found ${declaredShape.size}"
+            "$modelName input must have rank 2, found ${declaredShape.size}"
         }
         require(declaredShape[0] <= 0 || declaredShape[0] == 1L) {
-            "Only batch size 1 is supported; model declares ${declaredShape[0]}"
+            "$modelName only supports batch size 1; model declares ${declaredShape[0]}"
         }
-        require(declaredShape[1] == KNN_FEATURE_COUNT.toLong()) {
-            "KNN model expects $KNN_FEATURE_COUNT features; model declares ${declaredShape[1]}"
+        require(declaredShape[1] == expectedFeatureCount.toLong()) {
+            "$modelName expects $expectedFeatureCount features; model declares ${declaredShape[1]}"
         }
         require(tensorInfo.type == ai.onnxruntime.OnnxJavaType.FLOAT) {
-            "KNN model requires float input, found ${tensorInfo.type}"
+            "$modelName requires float input, found ${tensorInfo.type}"
         }
-        require(features.size == KNN_FEATURE_COUNT) {
-            "Feature extractor produced ${features.size} values; expected $KNN_FEATURE_COUNT"
+        require(features.size == expectedFeatureCount) {
+            "$modelName feature extractor produced ${features.size} values; expected $expectedFeatureCount"
         }
 
         return OnnxTensor.createTensor(
             env,
             FloatBuffer.wrap(features),
-            longArrayOf(1L, KNN_FEATURE_COUNT.toLong())
+            longArrayOf(1L, expectedFeatureCount.toLong())
         )
     }
 
     private fun extractFakeProbability(results: OrtSession.Result): Float {
+        return extractClassProbability(results, fakeClassIndex = 1)
+    }
+
+    private fun extractLgbmFakeProbability(results: OrtSession.Result): Float {
+        // The LightGBM notebook encodes FAKE as class 0 and REAL as class 1.
+        return extractClassProbability(results, fakeClassIndex = 0)
+    }
+
+    private fun extractClassProbability(results: OrtSession.Result, fakeClassIndex: Int): Float {
         val probabilityOutput = results.get("probabilities").orElse(null)
             ?: results.get("output_probability").orElseThrow {
                 IllegalStateException("Model probability output is missing")
@@ -590,16 +622,16 @@ class RealTimeAudioDetectionService : Service() {
             is List<*> -> {
                 val classProbabilities = value.firstOrNull() as? Map<*, *>
                     ?: throw IllegalStateException("Probability output has an unsupported map format")
-                (classProbabilities[1L] as? Number)?.toFloat()
-                    ?: (classProbabilities[1] as? Number)?.toFloat()
-                    ?: (classProbabilities["1"] as? Number)?.toFloat()
-                    ?: throw IllegalStateException("Probability output has no deepfake class (label 1)")
+                (classProbabilities[fakeClassIndex.toLong()] as? Number)?.toFloat()
+                    ?: (classProbabilities[fakeClassIndex] as? Number)?.toFloat()
+                    ?: (classProbabilities[fakeClassIndex.toString()] as? Number)?.toFloat()
+                    ?: throw IllegalStateException("Probability output has no fake class ($fakeClassIndex)")
             }
             is Map<*, *> -> {
-                (value[1L] as? Number)?.toFloat()
-                    ?: (value[1] as? Number)?.toFloat()
-                    ?: (value["1"] as? Number)?.toFloat()
-                    ?: throw IllegalStateException("Probability output has no deepfake class (label 1)")
+                (value[fakeClassIndex.toLong()] as? Number)?.toFloat()
+                    ?: (value[fakeClassIndex] as? Number)?.toFloat()
+                    ?: (value[fakeClassIndex.toString()] as? Number)?.toFloat()
+                    ?: throw IllegalStateException("Probability output has no fake class ($fakeClassIndex)")
             }
             is OnnxTensor -> {
                 val tensorInfo = probabilityOutput.info as? TensorInfo
@@ -611,7 +643,7 @@ class RealTimeAudioDetectionService : Service() {
                 val values = FloatArray(buffer.remaining()).also(buffer::get)
                 when (values.size) {
                     1 -> values[0]
-                    2 -> values[1]
+                    2 -> values[fakeClassIndex]
                     else -> throw IllegalStateException("Probability output has ${values.size} values")
                 }
             }
@@ -631,17 +663,34 @@ class RealTimeAudioDetectionService : Service() {
             val featuresResult = audioProcessor.generateKnnFeatures(audioData, SAMPLE_RATE, CHANNEL_COUNT)
             if (featuresResult.error != null) throw IllegalStateException(featuresResult.error)
 
-            val session = ortSession ?: throw IllegalStateException("ONNX session is not loaded")
-            val inputName = session.inputNames.firstOrNull() ?: throw IllegalStateException("No model input")
-            val fakeProb = buildOnnxInputTensor(featuresResult.features).use { input ->
-                session.run(mapOf(inputName to input)).use(::extractFakeProbability)
+            val knn = ortSession ?: throw IllegalStateException("KNN ONNX session is not loaded")
+            val lgbm = lgbmSession ?: throw IllegalStateException("LightGBM ONNX session is not loaded")
+            val knnInputName = knn.inputNames.firstOrNull() ?: throw IllegalStateException("KNN has no input")
+            val knnFakeProb = buildOnnxInputTensor(
+                featuresResult.features,
+                knn,
+                KNN_FEATURE_COUNT,
+                "KNN"
+            ).use { input ->
+                knn.run(mapOf(knnInputName to input)).use(::extractFakeProbability)
+            }
+            val lgbmFeatures = floatArrayOf(featuresResult.chromaStft, *featuresResult.features)
+            val lgbmInputName = lgbm.inputNames.firstOrNull() ?: throw IllegalStateException("LightGBM has no input")
+            val lgbmFakeProb = buildOnnxInputTensor(
+                lgbmFeatures,
+                lgbm,
+                LGBM_FEATURE_COUNT,
+                "LightGBM"
+            ).use { input ->
+                lgbm.run(mapOf(lgbmInputName to input)).use(::extractLgbmFakeProbability)
             }
 
-            val isFake = fakeProb > 0.5f
+            val isFake = knnFakeProb > 0.5f
             val result = DetectionResult(
                 timestamp = System.currentTimeMillis(),
                 isFake = isFake,
-                confidence = fakeProb,
+                confidence = knnFakeProb,
+                lgbmFakeConfidence = lgbmFakeProb,
                 audioChunkId = chunkId,
                 processingTimeMs = android.os.SystemClock.elapsedRealtime() - startTime
             )
@@ -649,8 +698,11 @@ class RealTimeAudioDetectionService : Service() {
             detectionResults.add(result)
             withContext(Dispatchers.Main) { updateOverlay(result) }
 
-            if (isFake && fakeProb > 0.7f) {
-                Timber.w("HIGH CONFIDENCE DEEPFAKE DETECTED: ${fakeProb * 100}%")
+            if (isFake && knnFakeProb > 0.7f) {
+                Timber.w("KNN reports high fake probability: ${knnFakeProb * 100}%")
+            }
+            if (lgbmFakeProb > 0.7f) {
+                Timber.w("LightGBM reports high fake probability: ${lgbmFakeProb * 100}%")
             }
         } catch (e: CancellationException) {
             throw e
@@ -673,22 +725,40 @@ class RealTimeAudioDetectionService : Service() {
                 val featuresResult = audioProcessor.generateKnnFeatures(audioData, sampleRate, channelCount)
                 if (featuresResult.error != null) throw IllegalStateException(featuresResult.error)
 
-                val session = ortSession ?: throw IllegalStateException("ONNX session is not loaded")
-                val inputName = session.inputNames.firstOrNull() ?: throw IllegalStateException("No model input")
-                val fakeProb = buildOnnxInputTensor(featuresResult.features).use { input ->
-                    session.run(mapOf(inputName to input)).use(::extractFakeProbability)
+                val knn = ortSession ?: throw IllegalStateException("KNN ONNX session is not loaded")
+                val lgbm = lgbmSession ?: throw IllegalStateException("LightGBM ONNX session is not loaded")
+                val knnInputName = knn.inputNames.firstOrNull() ?: throw IllegalStateException("KNN has no input")
+                val knnFakeProb = buildOnnxInputTensor(
+                    featuresResult.features,
+                    knn,
+                    KNN_FEATURE_COUNT,
+                    "KNN"
+                ).use { input ->
+                    knn.run(mapOf(knnInputName to input)).use(::extractFakeProbability)
+                }
+                val lgbmFeatures = floatArrayOf(featuresResult.chromaStft, *featuresResult.features)
+                val lgbmInputName = lgbm.inputNames.firstOrNull() ?: throw IllegalStateException("LightGBM has no input")
+                val lgbmFakeProb = buildOnnxInputTensor(
+                    lgbmFeatures,
+                    lgbm,
+                    LGBM_FEATURE_COUNT,
+                    "LightGBM"
+                ).use { input ->
+                    lgbm.run(mapOf(lgbmInputName to input)).use(::extractLgbmFakeProbability)
                 }
 
-                val isFake = fakeProb > 0.5f
-                val realProb = 1f - fakeProb
+                val isFake = knnFakeProb > 0.5f
+                val realProb = 1f - knnFakeProb
 
                 AudioAnalysisResult(
                     isFake = isFake,
-                    confidence = if (isFake) fakeProb else realProb,
-                    fakeConfidence = fakeProb,
+                    confidence = if (isFake) knnFakeProb else realProb,
+                    fakeConfidence = knnFakeProb,
                     realConfidence = realProb,
                     processingTimeMs = android.os.SystemClock.elapsedRealtime() - startTime,
                     audioLengthMs = audioLengthMs,
+                    lgbmFakeConfidence = lgbmFakeProb,
+                    lgbmRealConfidence = 1f - lgbmFakeProb,
                     warning = MODEL_WARNING
                 )
             } catch (e: CancellationException) {
@@ -735,7 +805,8 @@ class RealTimeAudioDetectionService : Service() {
         return analyzeRawAudio(audioData, sampleRate, audioLengthMs, channelCount)
     }
     
-    fun isReadyForAnalysis(): Boolean = isModelLoaded.get() && ortSession != null
+    fun isReadyForAnalysis(): Boolean =
+        isModelLoaded.get() && ortSession != null && lgbmSession != null
     
     fun getAudioSourceInfo(): String {
         return if (isRecording.get() && audioRecord != null) "Recording active" else "Not recording"
@@ -863,6 +934,7 @@ class RealTimeAudioDetectionService : Service() {
         hideOverlay()
         try {
             ortSession?.close()
+            lgbmSession?.close()
             ortEnv?.close()
         } catch (e: Exception) {
             Timber.e(e, "Error closing ONNX runtime resources")

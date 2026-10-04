@@ -19,3 +19,9 @@ They are not a validation set, and the detector may predict either label.
 
 The bundled knn_modelv2.onnx model was trained using one-second clips from
 this dataset. It is an adaptation derived from the dataset under CC BY 4.0.
+
+The bundled lgbmv2.onnx model was supplied separately by the application
+author and corresponds to the "Final Audio LGBM Classifier" notebook. Its
+reported notebook metrics are not representative of Android performance.
+The Android chroma_stft input is approximated and has not been validated
+against the notebook's feature extraction pipeline.
