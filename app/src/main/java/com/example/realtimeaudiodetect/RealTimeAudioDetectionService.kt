@@ -50,11 +50,11 @@ class RealTimeAudioDetectionService : Service() {
         private const val AUDIO_FORMAT = AudioFormat.ENCODING_PCM_16BIT
         private const val BUFFER_SIZE_FACTOR = 4
         
-        private const val AUDIO_CHUNK_DURATION_MS = 6000   // 6s chunks
-        private const val OVERLAP_DURATION_MS = 500        // 0.5s overlap
+        private const val AUDIO_CHUNK_DURATION_MS = 1000
+        private const val OVERLAP_DURATION_MS = 0
         private const val KNN_FEATURE_COUNT = 25
         const val MODEL_WARNING =
-            "Experimental result: Android feature extraction may differ from KNN training."
+            "Experimental: one-second live predictions are unvalidated and Android features may differ from training."
 
         @Volatile
         var isActive = false
@@ -512,9 +512,18 @@ class RealTimeAudioDetectionService : Service() {
                                     Timber.w("Dropping audio chunk ${chunkToProcess.first}; inference is behind")
                                 }
 
-                                val keepCount = chunkSamples - overlapSamples
-                                System.arraycopy(chunkQueue, overlapSamples, chunkQueue, 0, keepCount)
-                                queueSize = keepCount
+                                if (overlapSamples > 0) {
+                                    System.arraycopy(
+                                        chunkQueue,
+                                        chunkSamples - overlapSamples,
+                                        chunkQueue,
+                                        0,
+                                        overlapSamples
+                                    )
+                                    queueSize = overlapSamples
+                                } else {
+                                    queueSize = 0
+                                }
                                 chunkQueue[queueSize++] = audioBuffer[i]
                             }
                         }

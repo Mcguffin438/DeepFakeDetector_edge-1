@@ -224,7 +224,8 @@ class AudioProcessor {
             }
             sum / channelCount
         }
-        val waveform = FloatArray(sampleRate * 6) { i -> if (i < mono.size) mono[i] else 0f }
+        val featureWindow = mono.copyOf(minOf(mono.size, sampleRate * 6))
+        val waveform = featureWindow.copyOf(maxOf(FFT_SIZE, featureWindow.size))
         val stft = computeSTFT(waveform)
         val mfcc = applyDCT(convertToDb(applyMelFilterBank(stft)), NUM_FEATURE_BINS)
         val values = FloatArray(25)

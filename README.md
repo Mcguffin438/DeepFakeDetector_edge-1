@@ -21,8 +21,9 @@ A real-time Android deepfake-audio detection app that runs a KNN classifier loca
 This project implements a complete pipeline for edge-deployed deepfake detection, from feature extraction to real-time inference.
 
 **Feature Extraction Process:**
-- 25 features per audio chunk: RMS, spectral centroid, bandwidth, rolloff, zero-crossing rate, and 20 MFCC means
+- 25 features per live audio chunk: RMS, spectral centroid, bandwidth, rolloff, zero-crossing rate, and 20 MFCC means
 - Audio is processed at 16 kHz; call monitoring uses chunks from the built-in microphone and is intended for speakerphone use
+- Live monitoring collects one-second chunks and makes a new prediction once per second
 - Features are passed to the KNN model in the training feature order
 
 **Model Training & Deployment:**
@@ -52,6 +53,7 @@ This project implements a complete pipeline for edge-deployed deepfake detection
 - Audio processing: 25 KNN input features per chunk
 - Model deployment: ONNX with the scaler embedded in the model
 - The 96.03% holdout score is from one fixed dataset split, not an on-device or live-call benchmark
+- One-second live predictions have not been separately validated; the short window and Android feature extraction may reduce reliability
 
 **Architecture Highlights:**
 - KNN model input: `[batch, 25]`
@@ -124,7 +126,7 @@ val fakeProbability = result.fakeConfidence
 
 ### Model Integration
 - **ONNX Runtime**: Loads the bundled `knn_modelv2.onnx`, whose graph includes RobustScaler and KNN
-- **Feature Pipeline**: 16 kHz call audio → 25 features → ONNX KNN inference → fake/real probabilities
+- **Feature Pipeline**: 16 kHz call audio → one-second chunks → 25 features → ONNX KNN inference → fake/real probabilities
 
 ## Project Structure
 
@@ -149,7 +151,7 @@ DeepFakeDetector_edge/
 - **Model**: `app/src/main/assets/models/knn_modelv2.onnx`
 - **Input Shape**: `[batch, 25]`
 - **Input Features**: RMS, spectral centroid, bandwidth, rolloff, zero-crossing rate, followed by 20 MFCC means
-- **Audio Format**: 16 kHz mono or stereo PCM; inference uses a six-second feature window
+- **Audio Format**: 16 kHz mono or stereo PCM; live call inference uses one-second windows
 - **Outputs**: Predicted class and class probabilities
 
 ### Adding New Features
