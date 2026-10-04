@@ -2,7 +2,7 @@
 
 A complete edge deployment pipeline for real-time deepfake detection during phone calls. This Android application uses multi-channel feature extraction and on-device PyTorch Mobile inference to detect synthetic audio without cloud connectivity. This project is the implementation of the solution described in **Real-time Audio Detection on the Edge: Building Smarter Detection Where It Counts.**
 
-![RealTimeAudioDetect Workflow](images/deepfake_edge_workflow.webp)
+![KNN deepfake audio detection workflow](images/deepfake_edge_workflow.svg)
 
 ## Table of Contents
 - [Overview](#overview)
