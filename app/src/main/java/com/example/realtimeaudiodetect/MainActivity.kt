@@ -37,6 +37,7 @@ import java.io.BufferedInputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.Locale
 
 class MainActivity : AppCompatActivity(), ServiceConnection {
     
@@ -80,12 +81,14 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     private lateinit var layoutAnalysisResults: LinearLayout
     private lateinit var tvAnalysisResult: TextView
     private lateinit var tvConfidenceScores: TextView
+    private lateinit var tvDetectionTiming: TextView
     
     // Service state
     private var deepfakeService: RealTimeAudioDetectionService? = null
     private var isServiceBound = false
     private var isBindingToService = false
     private var selectedAudioUri: Uri? = null
+    private val liveProcessingTimesMs = ArrayDeque<Long>()
 
     private data class AudioFileData(
         val samples: ShortArray,
@@ -180,6 +183,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         layoutAnalysisResults = findViewById(R.id.layoutAnalysisResults)
         tvAnalysisResult = findViewById(R.id.tvAnalysisResult)
         tvConfidenceScores = findViewById(R.id.tvConfidenceScores)
+        tvDetectionTiming = findViewById(R.id.tvDetectionTiming)
         
         val prefs = getSharedPreferences("realtime_audio_detect", MODE_PRIVATE)
         switchAutoStart.isChecked = prefs.getBoolean("auto_start", false)
@@ -446,6 +450,8 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     private fun displayLiveDetectionResult(result: RealTimeAudioDetectionService.DetectionResult) {
         val knnFakePercent = (result.confidence * 100).toInt()
         val knnRealPercent = ((1f - result.confidence) * 100).toInt()
+        liveProcessingTimesMs.addLast(result.processingTimeMs)
+        if (liveProcessingTimesMs.size > 20) liveProcessingTimesMs.removeFirst()
         layoutAnalysisResults.visibility = View.VISIBLE
         val lgbmFake = result.lgbmFakeConfidence
         val lgbmIsFake = lgbmFake?.let { it > 0.5f }
@@ -468,6 +474,22 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }.orEmpty()
         tvConfidenceScores.text =
             "KNN: fake $knnFakePercent% | real $knnRealPercent%\n$lgbmScoreLine${result.warning.orEmpty()}"
+        val averageProcessingTime = liveProcessingTimesMs.average()
+        val maximumProcessingTime = liveProcessingTimesMs.maxOrNull() ?: result.processingTimeMs
+        tvDetectionTiming.text =
+            "Latest analysis: ${formatProcessingTime(result.processingTimeMs)} (chunk ${result.audioChunkId})\n" +
+                "Last ${liveProcessingTimesMs.size} chunks: avg ${formatProcessingTime(averageProcessingTime)}, " +
+                "max ${formatProcessingTime(maximumProcessingTime)}\n" +
+                "Timing starts after each 1-second audio chunk is collected."
+    }
+
+    private fun formatProcessingTime(timeMs: Number): String {
+        val milliseconds = timeMs.toDouble()
+        return if (milliseconds < 1000.0) {
+            String.format(Locale.US, "%.1f ms", milliseconds)
+        } else {
+            String.format(Locale.US, "%.2f s", milliseconds / 1000.0)
+        }
     }
     
     private fun startPulseAnimation(colorRes: Int) {
@@ -788,6 +810,9 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     
     private fun displayAnalysisResult(result: RealTimeAudioDetectionService.AudioAnalysisResult) {
         layoutAnalysisResults.visibility = View.VISIBLE
+        tvDetectionTiming.text =
+            "Analysis processing time: ${formatProcessingTime(result.processingTimeMs)}\n" +
+                "Includes feature extraction and both model inferences; excludes audio loading."
         if (result.error != null) {
             tvAnalysisResult.text = "Error"
             tvAnalysisResult.setTextColor(ContextCompat.getColor(this, R.color.error_color))
