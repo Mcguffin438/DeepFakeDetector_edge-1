@@ -43,6 +43,9 @@ class RealTimeAudioDetectionService : Service() {
         
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "deepfake_detection_channel"
+        private const val DEEPFAKE_ALERT_COOLDOWN_MS = 10_000L
+        private const val DEEPFAKE_ALERT_DURATION_MS = 350
+        const val DEEPFAKE_ALERT_CONFIDENCE_THRESHOLD = 0.8f
         
         // Audio processing setup
         private const val SAMPLE_RATE = 16000
@@ -90,6 +93,8 @@ class RealTimeAudioDetectionService : Service() {
     private val audioProcessor = AudioProcessor()
     private var pendingStartIntent: Intent? = null
     private var modelLoadJob: Job? = null
+    private var deepfakeAlertTone: ToneGenerator? = null
+    private var lastDeepfakeAlertTimeMs = Long.MIN_VALUE
     
     // Call state
     private var currentPhoneNumber: String? = null
@@ -916,6 +921,31 @@ class RealTimeAudioDetectionService : Service() {
     private fun updateOverlay(result: DetectionResult) {
         overlayView?.updateDetectionResult(result)
         detectionResultListener?.onDetectionResult(result)
+        if (result.isFake && result.confidence > DEEPFAKE_ALERT_CONFIDENCE_THRESHOLD) {
+            playDeepfakeAlert()
+        }
+    }
+
+    private fun playDeepfakeAlert() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (lastDeepfakeAlertTimeMs != Long.MIN_VALUE &&
+            now - lastDeepfakeAlertTimeMs < DEEPFAKE_ALERT_COOLDOWN_MS
+        ) {
+            return
+        }
+
+        val tone = deepfakeAlertTone ?: try {
+            ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80).also { deepfakeAlertTone = it }
+        } catch (e: RuntimeException) {
+            Timber.e(e, "Unable to initialize the deepfake audio warning")
+            return
+        }
+        if (tone.startTone(ToneGenerator.TONE_PROP_BEEP2, DEEPFAKE_ALERT_DURATION_MS)) {
+            lastDeepfakeAlertTimeMs = now
+            Timber.w("Audible warning played for a live-call chunk flagged as fake")
+        } else {
+            Timber.w("Unable to play the deepfake audio warning")
+        }
     }
     
     private fun generateCallSummary() {
@@ -958,6 +988,8 @@ class RealTimeAudioDetectionService : Service() {
         isActive = false
         stopAudioMonitoring()
         hideOverlay()
+        deepfakeAlertTone?.release()
+        deepfakeAlertTone = null
         try {
             ortSession?.close()
             lgbmSession?.close()

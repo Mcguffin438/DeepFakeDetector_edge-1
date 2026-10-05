@@ -455,12 +455,21 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         layoutAnalysisResults.visibility = View.VISIBLE
         val lgbmFake = result.lgbmFakeConfidence
         val lgbmIsFake = lgbmFake?.let { it > 0.5f }
-        tvAnalysisResult.text = when {
-            lgbmIsFake == null ->
-                if (result.isFake) "LIVE CALL: KNN FLAGS FAKE" else "LIVE CALL: KNN FLAGS REAL"
-            result.isFake && lgbmIsFake -> "LIVE CALL: BOTH MODELS FLAG FAKE"
-            !result.isFake && !lgbmIsFake -> "LIVE CALL: BOTH MODELS FLAG REAL"
-            else -> "LIVE CALL: MODELS DISAGREE"
+        val warningThresholdExceeded =
+            result.isFake && result.confidence >
+                RealTimeAudioDetectionService.DEEPFAKE_ALERT_CONFIDENCE_THRESHOLD
+        tvAnalysisResult.text = if (warningThresholdExceeded) {
+            "LIVE CALL WARNING: POSSIBLE DEEPFAKE\n" +
+                "KNN confidence: ${String.format(Locale.US, "%.1f%%", result.confidence * 100f)}\n" +
+                "Decision time: ${formatProcessingTime(result.processingTimeMs)}"
+        } else {
+            when {
+                lgbmIsFake == null ->
+                    if (result.isFake) "LIVE CALL: KNN FLAGS FAKE" else "LIVE CALL: KNN FLAGS REAL"
+                result.isFake && lgbmIsFake -> "LIVE CALL: BOTH MODELS FLAG FAKE"
+                !result.isFake && !lgbmIsFake -> "LIVE CALL: BOTH MODELS FLAG REAL"
+                else -> "LIVE CALL: MODELS DISAGREE"
+            }
         }
         tvAnalysisResult.setTextColor(
             ContextCompat.getColor(
