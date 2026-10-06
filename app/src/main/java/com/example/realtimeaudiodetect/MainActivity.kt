@@ -38,6 +38,8 @@ import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.Locale
+import kotlin.math.floor
+import kotlin.math.roundToInt
 
 class MainActivity : AppCompatActivity(), ServiceConnection {
     
@@ -814,7 +816,37 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
 
         val frameCount = size / blockAlign
         val samples = ShortArray(frameCount * channelCount) { index -> buffer.getShort(start + index * 2) }
-        return AudioFileData(samples, rate, channelCount)
+        val modelSampleRate = 16000
+        val modelSamples = resamplePcm16(samples, channelCount, rate, modelSampleRate)
+        return AudioFileData(modelSamples, modelSampleRate, channelCount)
+    }
+
+    private fun resamplePcm16(
+        samples: ShortArray,
+        channelCount: Int,
+        sourceRate: Int,
+        targetRate: Int
+    ): ShortArray {
+        if (sourceRate == targetRate) return samples
+
+        val sourceFrameCount = samples.size / channelCount
+        val targetFrameCount = (
+            (sourceFrameCount.toLong() * targetRate + sourceRate / 2) / sourceRate
+        ).toInt().coerceAtLeast(1)
+        return ShortArray(targetFrameCount * channelCount) { outputIndex ->
+            val outputFrame = outputIndex / channelCount
+            val channel = outputIndex % channelCount
+            val sourcePosition = outputFrame.toDouble() * sourceRate / targetRate
+            val firstFrame = floor(sourcePosition).toInt().coerceAtMost(sourceFrameCount - 1)
+            val secondFrame = (firstFrame + 1).coerceAtMost(sourceFrameCount - 1)
+            val fraction = (sourcePosition - firstFrame).toFloat()
+            val firstSample = samples[firstFrame * channelCount + channel].toFloat()
+            val secondSample = samples[secondFrame * channelCount + channel].toFloat()
+            (firstSample + (secondSample - firstSample) * fraction)
+                .roundToInt()
+                .coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt())
+                .toShort()
+        }
     }
     
     private fun displayAnalysisResult(result: RealTimeAudioDetectionService.AudioAnalysisResult) {

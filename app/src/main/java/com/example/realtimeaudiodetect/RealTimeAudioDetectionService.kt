@@ -11,6 +11,7 @@ import android.media.*
 import android.os.Binder
 import android.os.Build
 import android.os.IBinder
+import android.speech.tts.TextToSpeech
 import android.view.WindowManager
 import androidx.annotation.RequiresPermission
 import androidx.core.app.NotificationCompat
@@ -30,6 +31,7 @@ import android.graphics.PixelFormat
 import androidx.core.app.ActivityCompat
 import java.nio.FloatBuffer
 import java.io.FileOutputStream
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 
 class RealTimeAudioDetectionService : Service() {
@@ -44,8 +46,8 @@ class RealTimeAudioDetectionService : Service() {
         private const val NOTIFICATION_ID = 1001
         private const val CHANNEL_ID = "deepfake_detection_channel"
         private const val DEEPFAKE_ALERT_COOLDOWN_MS = 10_000L
-        private const val DEEPFAKE_ALERT_DURATION_MS = 350
         const val DEEPFAKE_ALERT_CONFIDENCE_THRESHOLD = 0.8f
+        private const val DEEPFAKE_ALERT_UTTERANCE_ID = "deepfake-warning"
         
         // Audio processing setup
         private const val SAMPLE_RATE = 16000
@@ -93,7 +95,9 @@ class RealTimeAudioDetectionService : Service() {
     private val audioProcessor = AudioProcessor()
     private var pendingStartIntent: Intent? = null
     private var modelLoadJob: Job? = null
-    private var deepfakeAlertTone: ToneGenerator? = null
+    private var deepfakeWarningTts: TextToSpeech? = null
+    private var deepfakeWarningTtsReady = false
+    private var deepfakeWarningPending = false
     private var lastDeepfakeAlertTimeMs = Long.MIN_VALUE
     
     // Call state
@@ -151,6 +155,34 @@ class RealTimeAudioDetectionService : Service() {
         super.onCreate()
         createNotificationChannel()
         initializeWindowManager()
+        deepfakeWarningTts = TextToSpeech(this) { status ->
+            if (status != TextToSpeech.SUCCESS) {
+                Timber.e("Unable to initialize text-to-speech for the deepfake warning")
+                return@TextToSpeech
+            }
+
+            val tts = deepfakeWarningTts ?: return@TextToSpeech
+            val languageStatus = tts.setLanguage(Locale.US)
+            if (languageStatus == TextToSpeech.LANG_MISSING_DATA ||
+                languageStatus == TextToSpeech.LANG_NOT_SUPPORTED
+            ) {
+                Timber.w("US English TTS voice is unavailable; using the engine's default voice")
+            }
+            val audioAttributesStatus = tts.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_NOTIFICATION_EVENT)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build()
+            )
+            if (audioAttributesStatus != TextToSpeech.SUCCESS) {
+                Timber.w("Unable to set notification audio attributes for the deepfake warning")
+            }
+            deepfakeWarningTtsReady = true
+            if (deepfakeWarningPending && !isStopping.get()) {
+                deepfakeWarningPending = false
+                speakDeepfakeWarning()
+            }
+        }
         Timber.d("RealTimeAudioDetectionService created")
     }
     
@@ -922,11 +954,11 @@ class RealTimeAudioDetectionService : Service() {
         overlayView?.updateDetectionResult(result)
         detectionResultListener?.onDetectionResult(result)
         if (result.isFake && result.confidence > DEEPFAKE_ALERT_CONFIDENCE_THRESHOLD) {
-            playDeepfakeAlert()
+            speakDeepfakeWarning()
         }
     }
 
-    private fun playDeepfakeAlert() {
+    private fun speakDeepfakeWarning() {
         val now = android.os.SystemClock.elapsedRealtime()
         if (lastDeepfakeAlertTimeMs != Long.MIN_VALUE &&
             now - lastDeepfakeAlertTimeMs < DEEPFAKE_ALERT_COOLDOWN_MS
@@ -934,17 +966,23 @@ class RealTimeAudioDetectionService : Service() {
             return
         }
 
-        val tone = deepfakeAlertTone ?: try {
-            ToneGenerator(AudioManager.STREAM_NOTIFICATION, 80).also { deepfakeAlertTone = it }
-        } catch (e: RuntimeException) {
-            Timber.e(e, "Unable to initialize the deepfake audio warning")
+        val tts = deepfakeWarningTts
+        if (!deepfakeWarningTtsReady || tts == null) {
+            deepfakeWarningPending = true
             return
         }
-        if (tone.startTone(ToneGenerator.TONE_PROP_BEEP2, DEEPFAKE_ALERT_DURATION_MS)) {
+
+        if (tts.speak(
+                "Warning, possible deepfake",
+                TextToSpeech.QUEUE_FLUSH,
+                null,
+                DEEPFAKE_ALERT_UTTERANCE_ID
+            ) == TextToSpeech.SUCCESS
+        ) {
             lastDeepfakeAlertTimeMs = now
-            Timber.w("Audible warning played for a live-call chunk flagged as fake")
+            Timber.w("Spoken warning played for a live-call chunk flagged as fake")
         } else {
-            Timber.w("Unable to play the deepfake audio warning")
+            Timber.w("Unable to speak the deepfake audio warning")
         }
     }
     
@@ -988,8 +1026,10 @@ class RealTimeAudioDetectionService : Service() {
         isActive = false
         stopAudioMonitoring()
         hideOverlay()
-        deepfakeAlertTone?.release()
-        deepfakeAlertTone = null
+        deepfakeWarningPending = false
+        deepfakeWarningTtsReady = false
+        deepfakeWarningTts?.shutdown()
+        deepfakeWarningTts = null
         try {
             ortSession?.close()
             lgbmSession?.close()
