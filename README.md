@@ -1,4 +1,4 @@
-# RealTimeAudioDFDetect - Real-time Deepfake Audio Detection
+# RADD - Real-time Audio Deepfake Detection
 
 A real-time Android deepfake-audio detection app that runs KNN and LightGBM classifiers locally with ONNX Runtime. It displays the models' separate fake/real scores and whether their predictions agree.
 
