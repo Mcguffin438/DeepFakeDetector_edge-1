@@ -18,7 +18,6 @@ timber = "5.0.1"
 mockito = "5.23.0"
 onnxruntime = "1.29.0"
 kotlindl = "0.5.2"
-opencv = "4.5.3"
 transportRuntime = "4.1.1"
 litertApi = "2.2.0"
 firebaseSessions = "3.0.8"
@@ -38,9 +37,7 @@ kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-cor
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
 
 # ML & Signal Processing
-opencv = { group = "com.quickbirdstudios", name = "opencv", version.ref = "opencv" }
 onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
-onnxruntime-qnn = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android-qnn", version.ref = "onnxruntime" }
 kotlindl-onnx = { group = "org.jetbrains.kotlinx", name = "kotlin-deeplearning-onnx", version.ref = "kotlindl" }
 
 # Testing
