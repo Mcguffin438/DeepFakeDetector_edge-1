@@ -2,7 +2,7 @@
 
 A real-time Android deepfake-audio detection app that runs KNN, LightGBM, MobileNetV3, and an experimental MobileNetV5-style classifier locally with ONNX Runtime. It displays separate fake/real scores, per-model inference times, and whether predictions agree.
 
-![Deepfake audio detection workflow](images/deepfake_edge_workflow.svg)
+![KNN training and KNN, LightGBM, MobileNetV3, and MobileNetV5-style inference workflow](images/deepfake_edge_workflow.svg)
 
 ## Table of Contents
 - [Overview](#overview)
