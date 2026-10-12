@@ -12,6 +12,10 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
+import android.media.AudioFormat
+import android.media.MediaCodec
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -34,6 +38,7 @@ import timber.log.Timber
 import androidx.core.content.edit
 import androidx.core.net.toUri
 import java.io.BufferedInputStream
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -90,6 +95,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     private var isServiceBound = false
     private var isBindingToService = false
     private var selectedAudioUri: Uri? = null
+    private var selectedSampleLabel: String? = null
     private val liveProcessingTimesMs = ArrayDeque<Long>()
 
     private data class AudioFileData(
@@ -125,7 +131,13 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     ) { uri ->
         uri?.let {
             selectedAudioUri = it
+            if (selectedSampleLabel == null) {
+                tvSelectedFile.text = getFileName(uri)
+            }
             updateSelectedFileUI()
+            if (selectedSampleLabel != null) {
+                analyzeSelectedAudioFile()
+            }
         }
     }
     
@@ -218,11 +230,11 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
 
         btnTestRealSample.setOnClickListener {
-            analyzeBundledSample("samples/audio/demo_real.wav", "Gary Stafford demo clip", "real")
+            launchSampleUpload("real")
         }
 
         btnTestFakeSample.setOnClickListener {
-            analyzeBundledSample("samples/audio/demo_fake.wav", "ElevenLabs demo clip", "fake")
+            launchSampleUpload("fake")
         }
 
         btnBrowseDatasetSamples.setOnClickListener {
@@ -595,16 +607,30 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         )
     
     private fun selectAudioFile() {
+        selectedSampleLabel = null
         try {
-            audioFilePickerLauncher.launch("audio/*")
+            audioFilePickerLauncher.launch("*/*")
         } catch (e: Exception) {
             Timber.e(e, "Error launching file picker")
         }
     }
     
+    private fun launchSampleUpload(sampleLabel: String) {
+        selectedSampleLabel = sampleLabel
+        try {
+            audioFilePickerLauncher.launch("*/*")
+        } catch (e: Exception) {
+            Timber.e(e, "Error launching sample picker for $sampleLabel")
+            Toast.makeText(this, "Unable to open file picker", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun updateSelectedFileUI() {
         selectedAudioUri?.let { uri ->
-            tvSelectedFile.text = getFileName(uri)
+            val labelText = selectedSampleLabel?.let { sampleLabel ->
+                "$sampleLabel sample: ${getFileName(uri)}"
+            } ?: getFileName(uri)
+            tvSelectedFile.text = labelText
             btnAnalyzeFile.isEnabled = true
             layoutAnalysisResults.visibility = View.GONE
         }
@@ -628,7 +654,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
                 try {
                     btnAnalyzeFile.isEnabled = false
                     progressBar.visibility = View.VISIBLE
-                    
+
                     val audioFile = readAudioFile(uri)
                     if (audioFile != null) {
                         analyzeRawAudio(
@@ -638,6 +664,9 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
                         ) { result ->
                             lifecycleScope.launch {
                                 displayAnalysisResult(result)
+                                if (selectedSampleLabel != null) {
+                                    tvConfidenceScores.append("\nUploaded sample label: ${selectedSampleLabel}")
+                                }
                                 btnAnalyzeFile.isEnabled = true
                                 progressBar.visibility = View.GONE
                             }
@@ -702,7 +731,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
             try {
                 val audioFile = withContext(Dispatchers.IO) {
                     assets.open(assetPath).use { input ->
-                        parsePcm16Wav(input.readBytes())
+                        parseWaveAudio(input.readBytes())
                     }
                 }
                 analyzeRawAudio(
@@ -737,16 +766,43 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     private suspend fun readAudioFile(uri: Uri): AudioFileData? {
         return withContext(Dispatchers.IO) {
             try {
-                contentResolver.openInputStream(uri)?.use { inputStream ->
+                val header = ByteArray(12)
+                val headerBytesRead = contentResolver.openInputStream(uri)?.use { inputStream ->
                     val bufferedStream = BufferedInputStream(inputStream)
-                    parsePcm16Wav(bufferedStream.readBytes())
+                    var total = 0
+                    while (total < header.size) {
+                        val count = bufferedStream.read(header, total, header.size - total)
+                        if (count < 0) break
+                        total += count
+                    }
+                    total
                 } ?: throw IOException("Unable to open selected audio file")
+
+                val container = if (headerBytesRead >= 4) {
+                    header.copyOfRange(0, 4).toString(Charsets.US_ASCII)
+                } else {
+                    ""
+                }
+                val fileName = getFileName(uri)
+                val extension = fileName.substringAfterLast('.', "").lowercase(Locale.ROOT)
+                val mimeType = contentResolver.getType(uri)?.lowercase(Locale.ROOT)
+                val isWaveFile = container == "RIFF" || container == "RIFX" || container == "RF64" ||
+                    extension == "wav" || extension == "wave" ||
+                    mimeType in setOf("audio/wav", "audio/wave", "audio/x-wav", "audio/vnd.wave")
+
+                if (isWaveFile) {
+                    contentResolver.openInputStream(uri)?.use { inputStream ->
+                        parseWaveAudio(BufferedInputStream(inputStream).readBytes())
+                    } ?: throw IOException("Unable to reopen selected audio file")
+                } else {
+                    decodeM4a(uri)
+                }
             } catch (e: Exception) {
                 Timber.e(e, "Error reading audio file")
                 withContext(Dispatchers.Main) {
                     Toast.makeText(
                         this@MainActivity,
-                        "Unsupported or invalid WAV file: ${e.message}",
+                        "Unsupported or invalid audio file: ${e.message}",
                         Toast.LENGTH_LONG
                     ).show()
                 }
@@ -755,43 +811,217 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         }
     }
 
-    private fun parsePcm16Wav(bytes: ByteArray): AudioFileData {
-        if (bytes.size < 12 ||
-            !bytes.copyOfRange(0, 4).contentEquals("RIFF".toByteArray(Charsets.US_ASCII)) ||
-            !bytes.copyOfRange(8, 12).contentEquals("WAVE".toByteArray(Charsets.US_ASCII))
-        ) {
-            throw IOException("Expected a RIFF/WAVE audio file")
+    private fun decodeM4a(uri: Uri): AudioFileData {
+        val extractor = MediaExtractor()
+        var decoder: MediaCodec? = null
+        try {
+            extractor.setDataSource(this, uri, null)
+            val audioTrack = (0 until extractor.trackCount).firstOrNull { index ->
+                extractor.getTrackFormat(index).getString(MediaFormat.KEY_MIME)
+                    ?.startsWith("audio/") == true
+            } ?: throw IOException("No audio track found; select a WAV or M4A audio file")
+            val inputFormat = extractor.getTrackFormat(audioTrack)
+            val mimeType = inputFormat.getString(MediaFormat.KEY_MIME)
+                ?: throw IOException("Audio track has no codec type")
+            extractor.selectTrack(audioTrack)
+            decoder = MediaCodec.createDecoderByType(mimeType)
+            decoder.configure(inputFormat, null, null, 0)
+            decoder.start()
+
+            val decodedPcm = ByteArrayOutputStream()
+            val bufferInfo = MediaCodec.BufferInfo()
+            var inputEnded = false
+            var outputEnded = false
+            var outputSampleRate = 0
+            var outputChannels = 0
+            var outputEncoding = AudioFormat.ENCODING_PCM_16BIT
+
+            fun writePcm16(sample: Int) {
+                decodedPcm.write(sample and 0xFF)
+                decodedPcm.write((sample shr 8) and 0xFF)
+            }
+
+            while (!outputEnded) {
+                if (!inputEnded) {
+                    val inputIndex = decoder.dequeueInputBuffer(10_000)
+                    if (inputIndex >= 0) {
+                        val inputBuffer = decoder.getInputBuffer(inputIndex)
+                            ?: throw IOException("Unable to read audio decoder input")
+                        inputBuffer.clear()
+                        val sampleSize = extractor.readSampleData(inputBuffer, 0)
+                        if (sampleSize < 0) {
+                            decoder.queueInputBuffer(
+                                inputIndex,
+                                0,
+                                0,
+                                0L,
+                                MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                            )
+                            inputEnded = true
+                        } else {
+                            decoder.queueInputBuffer(
+                                inputIndex,
+                                0,
+                                sampleSize,
+                                extractor.sampleTime,
+                                0
+                            )
+                            extractor.advance()
+                        }
+                    }
+                }
+
+                when (val outputIndex = decoder.dequeueOutputBuffer(bufferInfo, 10_000)) {
+                    MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                        val outputFormat = decoder.outputFormat
+                        outputSampleRate = outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                        outputChannels = outputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                        outputEncoding = if (outputFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)) {
+                            outputFormat.getInteger(MediaFormat.KEY_PCM_ENCODING)
+                        } else {
+                            AudioFormat.ENCODING_PCM_16BIT
+                        }
+                    }
+                    MediaCodec.INFO_TRY_AGAIN_LATER, MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED -> Unit
+                    else -> if (outputIndex >= 0) {
+                        if (bufferInfo.size > 0) {
+                            if (outputChannels !in 1..2 || outputSampleRate <= 0) {
+                                throw IOException("Decoded M4A audio must be mono or stereo")
+                            }
+                            val bytesPerSample = when (outputEncoding) {
+                                AudioFormat.ENCODING_PCM_8BIT -> 1
+                                AudioFormat.ENCODING_PCM_16BIT -> 2
+                                AudioFormat.ENCODING_PCM_FLOAT -> 4
+                                else -> throw IOException("Unsupported decoded M4A PCM encoding")
+                            }
+                            if (bufferInfo.size % (bytesPerSample * outputChannels) != 0) {
+                                throw IOException("M4A decoder returned incomplete PCM audio data")
+                            }
+                            val outputBuffer = decoder.getOutputBuffer(outputIndex)
+                                ?: throw IOException("Unable to read decoded M4A audio")
+                            val pcmBytes = outputBuffer.duplicate().apply {
+                                position(bufferInfo.offset)
+                                limit(bufferInfo.offset + bufferInfo.size)
+                            }.slice().order(ByteOrder.LITTLE_ENDIAN)
+                            when (outputEncoding) {
+                                AudioFormat.ENCODING_PCM_8BIT -> {
+                                    while (pcmBytes.hasRemaining()) {
+                                        writePcm16(((pcmBytes.get().toInt() and 0xFF) - 128) shl 8)
+                                    }
+                                }
+                                AudioFormat.ENCODING_PCM_16BIT -> {
+                                    val chunk = ByteArray(pcmBytes.remaining())
+                                    pcmBytes.get(chunk)
+                                    decodedPcm.write(chunk)
+                                }
+                                AudioFormat.ENCODING_PCM_FLOAT -> {
+                                    while (pcmBytes.hasRemaining()) {
+                                        val sample = Float.fromBits(pcmBytes.int)
+                                        val pcm16 = if (sample.isFinite()) {
+                                            (sample.coerceIn(-1f, 1f) * Short.MAX_VALUE)
+                                                .roundToInt()
+                                        } else {
+                                            0
+                                        }
+                                        writePcm16(pcm16)
+                                    }
+                                }
+                            }
+                        }
+                        outputEnded = bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+                        decoder.releaseOutputBuffer(outputIndex, false)
+                    }
+                }
+            }
+
+            val pcmBytes = decodedPcm.toByteArray()
+            val sampleCount = pcmBytes.size / 2
+            if (sampleCount == 0) throw IOException("M4A file contains no decodable audio")
+            val samples = ShortArray(sampleCount) { index ->
+                val byteIndex = index * 2
+                ((pcmBytes[byteIndex].toInt() and 0xFF) or
+                    (pcmBytes[byteIndex + 1].toInt() shl 8)).toShort()
+            }
+            val modelSampleRate = 16000
+            return AudioFileData(
+                resamplePcm16(samples, outputChannels, outputSampleRate, modelSampleRate),
+                modelSampleRate,
+                outputChannels
+            )
+        } catch (e: IOException) {
+            throw e
+        } catch (e: Exception) {
+            throw IOException("Unable to decode M4A audio: ${e.message}", e)
+        } finally {
+            try {
+                decoder?.stop()
+            } catch (_: IllegalStateException) {
+                // Decoder may not have reached the started state.
+            }
+            decoder?.release()
+            extractor.release()
+        }
+    }
+
+    private fun parseWaveAudio(bytes: ByteArray): AudioFileData {
+        if (bytes.size < 12) throw IOException("File is too short to contain a RIFF/WAVE header")
+
+        val container = bytes.copyOfRange(0, 4).toString(Charsets.US_ASCII)
+        val isBigEndianRiff = container == "RIFX"
+        val isRf64 = container == "RF64"
+        if (container != "RIFF" && !isBigEndianRiff && !isRf64) {
+            throw IOException("Expected a RIFF, RIFX, or RF64 audio file")
+        }
+        if (bytes.copyOfRange(8, 12).toString(Charsets.US_ASCII) != "WAVE") {
+            throw IOException("RIFF container is not a WAVE audio file")
         }
 
-        val buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
+        val buffer = ByteBuffer.wrap(bytes).order(if (isBigEndianRiff) ByteOrder.BIG_ENDIAN else ByteOrder.LITTLE_ENDIAN)
         var offset = 12
         var format: Int? = null
         var channels: Int? = null
         var sampleRate: Int? = null
         var bitsPerSample: Int? = null
+        var declaredBlockAlign: Int? = null
         var dataOffset: Int? = null
         var dataSize: Int? = null
+        var rf64DataSize: Long? = null
 
         while (offset <= bytes.size - 8) {
             val chunkSize = buffer.getInt(offset + 4).toLong() and 0xFFFF_FFFFL
             val chunkStart = offset + 8
-            if (chunkSize > bytes.size - chunkStart) {
+            val chunkId = bytes.copyOfRange(offset, offset + 4).toString(Charsets.US_ASCII)
+            val actualChunkSize = if (isRf64 && chunkSize == 0xFFFF_FFFFL && chunkId == "data") {
+                rf64DataSize ?: throw IOException("RF64 data size is missing from the ds64 chunk")
+            } else {
+                chunkSize
+            }
+            if (actualChunkSize > bytes.size - chunkStart) {
                 throw IOException("WAV chunk extends beyond end of file")
             }
-            val chunkLength = chunkSize.toInt()
+            val chunkLength = actualChunkSize.toInt()
             val chunkEnd = chunkStart + chunkLength
 
-            when {
-                bytes.copyOfRange(offset, offset + 4)
-                    .contentEquals("fmt ".toByteArray(Charsets.US_ASCII)) -> {
+            when (chunkId) {
+                "ds64" -> {
+                    if (chunkLength < 28) throw IOException("Invalid RF64 ds64 chunk")
+                    val size = buffer.getLong(chunkStart + 8)
+                    if (size < 0) throw IOException("RF64 data chunk is too large")
+                    rf64DataSize = size
+                }
+                "fmt " -> {
                     if (chunkLength < 16) throw IOException("Invalid WAV format chunk")
                     format = buffer.getShort(chunkStart).toInt() and 0xFFFF
                     channels = buffer.getShort(chunkStart + 2).toInt() and 0xFFFF
                     sampleRate = buffer.getInt(chunkStart + 4)
+                    declaredBlockAlign = buffer.getShort(chunkStart + 12).toInt() and 0xFFFF
                     bitsPerSample = buffer.getShort(chunkStart + 14).toInt() and 0xFFFF
+                    if (format == 0xFFFE) {
+                        if (chunkLength < 40) throw IOException("Invalid WAVE_FORMAT_EXTENSIBLE chunk")
+                        format = buffer.getInt(chunkStart + 24)
+                    }
                 }
-                bytes.copyOfRange(offset, offset + 4)
-                    .contentEquals("data".toByteArray(Charsets.US_ASCII)) -> {
+                "data" -> {
                     dataOffset = chunkStart
                     dataSize = chunkLength
                 }
@@ -802,20 +1032,59 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
 
         val channelCount = channels ?: throw IOException("WAV format chunk is missing")
         val rate = sampleRate ?: throw IOException("WAV sample rate is missing")
-        if (format != 1 || bitsPerSample != 16 || channelCount !in 1..2) {
-            throw IOException("Only 16-bit PCM mono or stereo WAV files are supported")
+        val sampleFormat = format
+        val sampleBits = bitsPerSample
+        if (channelCount !in 1..2) {
+            throw IOException("Only mono or stereo WAVE audio is supported")
+        }
+        if (sampleFormat != 1 && sampleFormat != 3) {
+            throw IOException("WAVE encoding must be integer PCM or 32-bit IEEE float")
+        }
+        if (sampleFormat == 1 && sampleBits !in setOf(8, 16, 24, 32) ||
+            sampleFormat == 3 && sampleBits != 32
+        ) {
+            throw IOException("Unsupported WAVE sample format; use 8/16/24/32-bit PCM or 32-bit float")
         }
         if (rate <= 0) throw IOException("Invalid WAV sample rate")
 
         val start = dataOffset ?: throw IOException("WAV data chunk is missing")
         val size = dataSize ?: throw IOException("WAV data chunk is missing")
-        val blockAlign = channelCount * 2
+        val bytesPerSample = sampleBits!! / 8
+        val blockAlign = channelCount * bytesPerSample
+        if (declaredBlockAlign != blockAlign) {
+            throw IOException("Invalid WAV block alignment")
+        }
         if (size == 0 || size % blockAlign != 0) {
             throw IOException("WAV audio data is empty or incomplete")
         }
 
         val frameCount = size / blockAlign
-        val samples = ShortArray(frameCount * channelCount) { index -> buffer.getShort(start + index * 2) }
+        val samples = ShortArray(frameCount * channelCount) { index ->
+            val sampleOffset = start + index * bytesPerSample
+            val sample = when {
+                sampleFormat == 3 -> {
+                    val floatValue = Float.fromBits(buffer.getInt(sampleOffset))
+                    if (floatValue.isFinite()) (floatValue.coerceIn(-1f, 1f) * Short.MAX_VALUE).roundToInt()
+                    else 0
+                }
+                sampleBits == 8 -> ((bytes[sampleOffset].toInt() and 0xFF) - 128) shl 8
+                sampleBits == 16 -> buffer.getShort(sampleOffset).toInt()
+                sampleBits == 24 -> {
+                    val value = if (isBigEndianRiff) {
+                        ((bytes[sampleOffset].toInt() shl 16) or
+                            ((bytes[sampleOffset + 1].toInt() and 0xFF) shl 8) or
+                            (bytes[sampleOffset + 2].toInt() and 0xFF))
+                    } else {
+                        ((bytes[sampleOffset + 2].toInt() shl 16) or
+                            ((bytes[sampleOffset + 1].toInt() and 0xFF) shl 8) or
+                            (bytes[sampleOffset].toInt() and 0xFF))
+                    }
+                    (value shl 8) shr 16
+                }
+                else -> (buffer.getInt(sampleOffset) shr 16)
+            }
+            sample.coerceIn(Short.MIN_VALUE.toInt(), Short.MAX_VALUE.toInt()).toShort()
+        }
         val modelSampleRate = 16000
         val modelSamples = resamplePcm16(samples, channelCount, rate, modelSampleRate)
         return AudioFileData(modelSamples, modelSampleRate, channelCount)

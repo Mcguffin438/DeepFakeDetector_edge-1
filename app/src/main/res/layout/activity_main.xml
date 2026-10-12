@@ -276,7 +276,7 @@
                             android:layout_height="52dp"
                             android:layout_weight="1"
                             android:layout_marginEnd="6dp"
-                            android:text="Test real sample"
+                            android:text="Upload real sample"
                             app:cornerRadius="14dp" />
 
                         <com.google.android.material.button.MaterialButton
@@ -286,7 +286,7 @@
                             android:layout_height="52dp"
                             android:layout_weight="1"
                             android:layout_marginStart="6dp"
-                            android:text="Test fake sample"
+                            android:text="Upload fake sample"
                             app:cornerRadius="14dp" />
                     </LinearLayout>
 
