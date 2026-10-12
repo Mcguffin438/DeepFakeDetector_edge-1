@@ -264,7 +264,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         if (missingPermissions.isNotEmpty()) {
             AlertDialog.Builder(this)
                 .setTitle("Permissions Required")
-                .setMessage("RealTimeAudioDetect needs these permissions to monitor phone calls and detect deepfakes in real-time:\n\n" +
+                .setMessage("RADD needs these permissions to monitor phone calls and detect deepfakes in real-time:\n\n" +
                         "• Phone permissions: To detect when calls start/end\n" +
                         "• Audio recording: To analyze call audio\n" +
                         "• Notifications: To display service status")
@@ -282,7 +282,7 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         if (!hasOverlayPermission()) {
             AlertDialog.Builder(this)
                 .setTitle("Overlay Permission Required")
-                .setMessage("RealTimeAudioDetect needs permission to display detection results over other apps during calls.")
+                .setMessage("RADD needs permission to display detection results over other apps during calls.")
                 .setPositiveButton("Grant") { _, _ ->
                     val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION).apply {
                         data = "package:$packageName".toUri()
@@ -1262,8 +1262,8 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     
     private fun showAbout() {
         AlertDialog.Builder(this)
-            .setTitle("About RealTimeAudioDetect")
-            .setMessage("RealTimeAudioDetect v1.0\n\nReal-time deepfake audio detection for calls.\nBuilt with ONNX Runtime.")
+            .setTitle("About RADD")
+            .setMessage("RADD v1.0\n\nReal-time audio deepfake detection for calls.\nBuilt with ONNX Runtime.")
             .setPositiveButton("OK", null)
             .show()
     }
