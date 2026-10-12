@@ -61,7 +61,7 @@ class RealTimeAudioDetectionService : Service() {
         private const val KNN_FEATURE_COUNT = 25
         private const val LGBM_FEATURE_COUNT = 26
         const val MODEL_WARNING =
-            "Experimental: both models' one-second live predictions are unvalidated; Android features may differ from training."
+            "Experimental: one-second KNN, LightGBM, MobileNetV3, and project-specific MobileNetV5 predictions are not validated for real-world calls."
 
         @Volatile
         var isActive = false
@@ -91,6 +91,8 @@ class RealTimeAudioDetectionService : Service() {
     private var ortEnv: OrtEnvironment? = null
     private var ortSession: OrtSession? = null
     private var lgbmSession: OrtSession? = null
+    private var mobileNetSession: OrtSession? = null
+    private var mobileNetV5Session: OrtSession? = null
     private var isModelLoaded = AtomicBoolean(false)
     private val audioProcessor = AudioProcessor()
     private var pendingStartIntent: Intent? = null
@@ -133,6 +135,12 @@ class RealTimeAudioDetectionService : Service() {
         val isFake: Boolean,
         val confidence: Float,
         val lgbmFakeConfidence: Float? = null,
+        val mobileNetFakeConfidence: Float? = null,
+        val mobileNetV5FakeConfidence: Float? = null,
+        val knnInferenceTimeMs: Double? = null,
+        val lgbmInferenceTimeMs: Double? = null,
+        val mobileNetInferenceTimeMs: Double? = null,
+        val mobileNetV5InferenceTimeMs: Double? = null,
         val audioChunkId: Int = -1,
         val processingTimeMs: Long = 0L,
         val warning: String? = MODEL_WARNING
@@ -147,6 +155,12 @@ class RealTimeAudioDetectionService : Service() {
         val audioLengthMs: Long,
         val lgbmFakeConfidence: Float? = null,
         val lgbmRealConfidence: Float? = null,
+        val mobileNetFakeConfidence: Float? = null,
+        val mobileNetV5FakeConfidence: Float? = null,
+        val knnInferenceTimeMs: Double? = null,
+        val lgbmInferenceTimeMs: Double? = null,
+        val mobileNetInferenceTimeMs: Double? = null,
+        val mobileNetV5InferenceTimeMs: Double? = null,
         val error: String? = null,
         val warning: String? = MODEL_WARNING
     )
@@ -232,7 +246,9 @@ class RealTimeAudioDetectionService : Service() {
         currentPhoneNumber = intent.getStringExtra(EXTRA_PHONE_NUMBER)
         isIncomingCall = intent.getBooleanExtra(EXTRA_IS_INCOMING, false)
 
-        if (!isModelLoaded.get() || ortSession == null || lgbmSession == null) {
+        if (!isModelLoaded.get() || ortSession == null || lgbmSession == null ||
+            mobileNetSession == null || mobileNetV5Session == null
+        ) {
             pendingStartIntent = intent
             handlePrepare(intent)
             return
@@ -245,7 +261,12 @@ class RealTimeAudioDetectionService : Service() {
     private fun startDetectionSession() {
         if (isStopping.get()) return
         pendingStartIntent = null
-        startForeground(NOTIFICATION_ID, createNotification("Monitoring speakerphone audio - experimental KNN + LightGBM"))
+        startForeground(
+            NOTIFICATION_ID,
+            createNotification(
+                "Monitoring speakerphone audio - experimental KNN + LightGBM + MobileNetV3/V5"
+            )
+        )
         showOverlay()
         startAudioMonitoring()
     }
@@ -271,8 +292,12 @@ class RealTimeAudioDetectionService : Service() {
         try {
             val knnModelFile = getModelFile("knn_modelv2.onnx")
             val lgbmModelFile = getModelFile("lgbmv2.onnx")
-            if (!knnModelFile.exists() || !lgbmModelFile.exists()) {
-                Timber.e("KNN or LightGBM ONNX model file is missing")
+            val mobileNetModelFile = getModelFile("mobilenetv3_audio.onnx")
+            val mobileNetV5ModelFile = getModelFile("mobilenetv5_audio.onnx")
+            if (!knnModelFile.exists() || !lgbmModelFile.exists() ||
+                !mobileNetModelFile.exists() || !mobileNetV5ModelFile.exists()
+            ) {
+                Timber.e("KNN, LightGBM, MobileNetV3, or MobileNetV5 ONNX model file is missing")
                 isModelLoaded.set(false)
                 return
             }
@@ -285,13 +310,32 @@ class RealTimeAudioDetectionService : Service() {
                 loadedKnnSession.close()
                 throw e
             }
+            val loadedMobileNetSession = try {
+                createSessionWithProviderFallbacks(mobileNetModelFile)
+            } catch (e: Exception) {
+                loadedKnnSession.close()
+                loadedLgbmSession.close()
+                throw e
+            }
+            val loadedMobileNetV5Session = try {
+                createSessionWithProviderFallbacks(mobileNetV5ModelFile)
+            } catch (e: Exception) {
+                loadedKnnSession.close()
+                loadedLgbmSession.close()
+                loadedMobileNetSession.close()
+                throw e
+            }
             if (isStopping.get()) {
                 loadedKnnSession.close()
                 loadedLgbmSession.close()
+                loadedMobileNetSession.close()
+                loadedMobileNetV5Session.close()
                 return
             }
             ortSession = loadedKnnSession
             lgbmSession = loadedLgbmSession
+            mobileNetSession = loadedMobileNetSession
+            mobileNetV5Session = loadedMobileNetV5Session
             isModelLoaded.set(true)
 
             val queuedIntent = pendingStartIntent
@@ -316,11 +360,12 @@ class RealTimeAudioDetectionService : Service() {
                 }
             }
 
-            Timber.i("ONNX KNN and LightGBM models loaded successfully")
+            Timber.i("ONNX KNN, LightGBM, MobileNetV3, and MobileNetV5 models loaded successfully")
 
             serviceScope.launch(Dispatchers.Main) {
                 if (isStopping.get()) return@launch
-                val notification = createNotification("KNN + LightGBM models loaded - experimental results")
+                val notification =
+                    createNotification("KNN + LightGBM + MobileNetV3/V5 loaded - experimental results")
                 val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
                 notificationManager.notify(NOTIFICATION_ID, notification)
             }
@@ -329,8 +374,12 @@ class RealTimeAudioDetectionService : Service() {
             Timber.e(e, "Failed to load ONNX models")
             ortSession?.close()
             lgbmSession?.close()
+            mobileNetSession?.close()
+            mobileNetV5Session?.close()
             ortSession = null
             lgbmSession = null
+            mobileNetSession = null
+            mobileNetV5Session = null
             isModelLoaded.set(false)
             serviceScope.launch(Dispatchers.Main) {
                 if (isStopping.get()) return@launch
@@ -710,6 +759,133 @@ class RealTimeAudioDetectionService : Service() {
         return probability
     }
 
+    private fun extractMobileNetFakeProbability(results: OrtSession.Result): Float {
+        val output = results.get("class_probabilities").orElseThrow {
+            IllegalStateException("MobileNet probability output is missing")
+        }
+        val tensor = output.value as? Array<*>
+            ?: throw IllegalStateException("MobileNet probability output has an unsupported format")
+        require(tensor.size == 1) {
+            "MobileNet output must have batch size 1, found ${tensor.size}"
+        }
+        val probabilities = tensor[0] as? FloatArray
+            ?: throw IllegalStateException("MobileNet output must contain two class probabilities")
+        require(probabilities.size == 2) {
+            "MobileNet output must contain real and fake probabilities"
+        }
+        val probability = probabilities[1]
+        require(probability.isFinite() && probability in 0f..1f) {
+            "MobileNetV3 returned invalid fake probability: $probability"
+        }
+        return probability
+    }
+
+    private data class TimedProbability(
+        val fakeProbability: Float,
+        val inferenceTimeMs: Double
+    )
+
+    private fun runTimedInference(
+        session: OrtSession,
+        inputName: String,
+        input: OnnxTensor,
+        extractProbability: (OrtSession.Result) -> Float
+    ): TimedProbability {
+        val inferenceStartNs = android.os.SystemClock.elapsedRealtimeNanos()
+        val probability = session.run(mapOf(inputName to input)).use(extractProbability)
+        val inferenceTimeMs =
+            (android.os.SystemClock.elapsedRealtimeNanos() - inferenceStartNs) / 1_000_000.0
+        return TimedProbability(probability, inferenceTimeMs)
+    }
+
+    private fun runMobileNetInference(
+        features: MultiChannelFeaturesResult,
+        session: OrtSession,
+        modelName: String
+    ): TimedProbability {
+        val inputInfo = session.inputInfo
+        if (inputInfo.size != 1) {
+            throw IllegalStateException("$modelName expects one input, found ${inputInfo.size}")
+        }
+        val inputTensorInfo = inputInfo.values.first().info as? TensorInfo
+            ?: throw IllegalStateException("$modelName input is not a tensor")
+        require(inputTensorInfo.type == ai.onnxruntime.OnnxJavaType.FLOAT) {
+            "$modelName requires float input, found ${inputTensorInfo.type}"
+        }
+        val shape = features.shape
+        require(shape.size == 3 && shape[0] == 3 && shape[1] == 64 && shape[2] > 0) {
+            "$modelName feature extractor returned invalid shape ${shape.contentToString()}"
+        }
+        val declaredShape = inputTensorInfo.shape
+        require(declaredShape.size == 4) {
+            "$modelName input must have rank 4, found ${declaredShape.size}"
+        }
+        require(declaredShape[0] <= 0 || declaredShape[0] == 1L) {
+            "$modelName only supports batch size 1"
+        }
+        require(declaredShape[1] == 3L && declaredShape[2] == 64L) {
+            "$modelName model must accept [batch, 3, 64, time] input"
+        }
+        require(declaredShape[3] <= 0 || declaredShape[3] == shape[2].toLong()) {
+            "$modelName time dimension does not match extracted features"
+        }
+        val env = ortEnv ?: throw IllegalStateException("ONNX Runtime environment is not initialized")
+        val input = OnnxTensor.createTensor(
+            env,
+            FloatBuffer.wrap(features.features),
+            longArrayOf(1L, 3L, 64L, shape[2].toLong())
+        )
+        return input.use {
+            runTimedInference(session, inputInfo.keys.first(), input, ::extractMobileNetFakeProbability)
+        }
+    }
+
+    private data class TimedMobileNetScores(
+        val v3: TimedProbability,
+        val v5: TimedProbability
+    )
+
+    private fun scoreMobileNetAudio(
+        audioData: ShortArray,
+        channelCount: Int,
+        v3Session: OrtSession,
+        v5Session: OrtSession
+    ): TimedMobileNetScores {
+        if (audioData.isEmpty() || audioData.size % channelCount != 0) {
+            throw IllegalArgumentException("Audio channel layout is invalid")
+        }
+        val frameCount = audioData.size / channelCount
+        val framesPerWindow = SAMPLE_RATE
+        var v3Probability = 0f
+        var v3InferenceTimeMs = 0.0
+        var v5Probability = 0f
+        var v5InferenceTimeMs = 0.0
+        var windowCount = 0
+        var frameStart = 0
+        while (frameStart < frameCount) {
+            val framesInWindow = minOf(framesPerWindow, frameCount - frameStart)
+            val window = ShortArray(framesPerWindow * channelCount)
+            val sourceStart = frameStart * channelCount
+            val sampleCount = framesInWindow * channelCount
+            audioData.copyInto(window, 0, sourceStart, sourceStart + sampleCount)
+            val features = audioProcessor.generateMobileNetFeatures(window, SAMPLE_RATE, channelCount)
+            if (features.error != null) throw IllegalStateException(features.error)
+            val v3Result = runMobileNetInference(features, v3Session, "MobileNetV3")
+            val v5Result = runMobileNetInference(features, v5Session, "MobileNetV5")
+            v3Probability += v3Result.fakeProbability
+            v3InferenceTimeMs += v3Result.inferenceTimeMs
+            v5Probability += v5Result.fakeProbability
+            v5InferenceTimeMs += v5Result.inferenceTimeMs
+            windowCount++
+            frameStart += framesPerWindow
+        }
+        if (windowCount == 0) throw IllegalArgumentException("Audio data is empty")
+        return TimedMobileNetScores(
+            TimedProbability(v3Probability / windowCount, v3InferenceTimeMs),
+            TimedProbability(v5Probability / windowCount, v5InferenceTimeMs)
+        )
+    }
+
     private fun selectFakeClassProbability(probabilities: FloatArray, fakeClassIndex: Int): Float {
         return when (probabilities.size) {
             1 -> probabilities[0]
@@ -728,32 +904,44 @@ class RealTimeAudioDetectionService : Service() {
 
             val knn = ortSession ?: throw IllegalStateException("KNN ONNX session is not loaded")
             val lgbm = lgbmSession ?: throw IllegalStateException("LightGBM ONNX session is not loaded")
+            val mobileNet = mobileNetSession
+                ?: throw IllegalStateException("MobileNetV3 ONNX session is not loaded")
+            val mobileNetV5 = mobileNetV5Session
+                ?: throw IllegalStateException("MobileNetV5 ONNX session is not loaded")
             val knnInputName = knn.inputNames.firstOrNull() ?: throw IllegalStateException("KNN has no input")
-            val knnFakeProb = buildOnnxInputTensor(
+            val knnInference = buildOnnxInputTensor(
                 featuresResult.features,
                 knn,
                 KNN_FEATURE_COUNT,
                 "KNN"
             ).use { input ->
-                knn.run(mapOf(knnInputName to input)).use(::extractFakeProbability)
+                runTimedInference(knn, knnInputName, input, ::extractFakeProbability)
             }
             val lgbmFeatures = floatArrayOf(featuresResult.chromaStft, *featuresResult.features)
             val lgbmInputName = lgbm.inputNames.firstOrNull() ?: throw IllegalStateException("LightGBM has no input")
-            val lgbmFakeProb = buildOnnxInputTensor(
+            val lgbmInference = buildOnnxInputTensor(
                 lgbmFeatures,
                 lgbm,
                 LGBM_FEATURE_COUNT,
                 "LightGBM"
             ).use { input ->
-                lgbm.run(mapOf(lgbmInputName to input)).use(::extractLgbmFakeProbability)
+                runTimedInference(lgbm, lgbmInputName, input, ::extractLgbmFakeProbability)
             }
+            val mobileNetInferences =
+                scoreMobileNetAudio(audioData, CHANNEL_COUNT, mobileNet, mobileNetV5)
 
-            val isFake = knnFakeProb > 0.5f
+            val isFake = knnInference.fakeProbability > 0.5f
             val result = DetectionResult(
                 timestamp = System.currentTimeMillis(),
                 isFake = isFake,
-                confidence = knnFakeProb,
-                lgbmFakeConfidence = lgbmFakeProb,
+                confidence = knnInference.fakeProbability,
+                lgbmFakeConfidence = lgbmInference.fakeProbability,
+                mobileNetFakeConfidence = mobileNetInferences.v3.fakeProbability,
+                mobileNetV5FakeConfidence = mobileNetInferences.v5.fakeProbability,
+                knnInferenceTimeMs = knnInference.inferenceTimeMs,
+                lgbmInferenceTimeMs = lgbmInference.inferenceTimeMs,
+                mobileNetInferenceTimeMs = mobileNetInferences.v3.inferenceTimeMs,
+                mobileNetV5InferenceTimeMs = mobileNetInferences.v5.inferenceTimeMs,
                 audioChunkId = chunkId,
                 processingTimeMs = android.os.SystemClock.elapsedRealtime() - startTime
             )
@@ -761,11 +949,11 @@ class RealTimeAudioDetectionService : Service() {
             detectionResults.add(result)
             withContext(Dispatchers.Main) { updateOverlay(result) }
 
-            if (isFake && knnFakeProb > 0.7f) {
-                Timber.w("KNN reports high fake probability: ${knnFakeProb * 100}%")
+            if (isFake && knnInference.fakeProbability > 0.7f) {
+                Timber.w("KNN reports high fake probability: ${knnInference.fakeProbability * 100}%")
             }
-            if (lgbmFakeProb > 0.7f) {
-                Timber.w("LightGBM reports high fake probability: ${lgbmFakeProb * 100}%")
+            if (lgbmInference.fakeProbability > 0.7f) {
+                Timber.w("LightGBM reports high fake probability: ${lgbmInference.fakeProbability * 100}%")
             }
         } catch (e: CancellationException) {
             throw e
@@ -790,38 +978,50 @@ class RealTimeAudioDetectionService : Service() {
 
                 val knn = ortSession ?: throw IllegalStateException("KNN ONNX session is not loaded")
                 val lgbm = lgbmSession ?: throw IllegalStateException("LightGBM ONNX session is not loaded")
+                val mobileNet = mobileNetSession
+                    ?: throw IllegalStateException("MobileNetV3 ONNX session is not loaded")
+                val mobileNetV5 = mobileNetV5Session
+                    ?: throw IllegalStateException("MobileNetV5 ONNX session is not loaded")
                 val knnInputName = knn.inputNames.firstOrNull() ?: throw IllegalStateException("KNN has no input")
-                val knnFakeProb = buildOnnxInputTensor(
+                val knnInference = buildOnnxInputTensor(
                     featuresResult.features,
                     knn,
                     KNN_FEATURE_COUNT,
                     "KNN"
                 ).use { input ->
-                    knn.run(mapOf(knnInputName to input)).use(::extractFakeProbability)
+                    runTimedInference(knn, knnInputName, input, ::extractFakeProbability)
                 }
                 val lgbmFeatures = floatArrayOf(featuresResult.chromaStft, *featuresResult.features)
                 val lgbmInputName = lgbm.inputNames.firstOrNull() ?: throw IllegalStateException("LightGBM has no input")
-                val lgbmFakeProb = buildOnnxInputTensor(
+                val lgbmInference = buildOnnxInputTensor(
                     lgbmFeatures,
                     lgbm,
                     LGBM_FEATURE_COUNT,
                     "LightGBM"
                 ).use { input ->
-                    lgbm.run(mapOf(lgbmInputName to input)).use(::extractLgbmFakeProbability)
+                    runTimedInference(lgbm, lgbmInputName, input, ::extractLgbmFakeProbability)
                 }
+                val mobileNetInferences =
+                    scoreMobileNetAudio(audioData, channelCount, mobileNet, mobileNetV5)
 
-                val isFake = knnFakeProb > 0.5f
-                val realProb = 1f - knnFakeProb
+                val isFake = knnInference.fakeProbability > 0.5f
+                val realProb = 1f - knnInference.fakeProbability
 
                 AudioAnalysisResult(
                     isFake = isFake,
-                    confidence = if (isFake) knnFakeProb else realProb,
-                    fakeConfidence = knnFakeProb,
+                    confidence = if (isFake) knnInference.fakeProbability else realProb,
+                    fakeConfidence = knnInference.fakeProbability,
                     realConfidence = realProb,
                     processingTimeMs = android.os.SystemClock.elapsedRealtime() - startTime,
                     audioLengthMs = audioLengthMs,
-                    lgbmFakeConfidence = lgbmFakeProb,
-                    lgbmRealConfidence = 1f - lgbmFakeProb,
+                    lgbmFakeConfidence = lgbmInference.fakeProbability,
+                    lgbmRealConfidence = 1f - lgbmInference.fakeProbability,
+                    mobileNetFakeConfidence = mobileNetInferences.v3.fakeProbability,
+                    mobileNetV5FakeConfidence = mobileNetInferences.v5.fakeProbability,
+                    knnInferenceTimeMs = knnInference.inferenceTimeMs,
+                    lgbmInferenceTimeMs = lgbmInference.inferenceTimeMs,
+                    mobileNetInferenceTimeMs = mobileNetInferences.v3.inferenceTimeMs,
+                    mobileNetV5InferenceTimeMs = mobileNetInferences.v5.inferenceTimeMs,
                     warning = MODEL_WARNING
                 )
             } catch (e: CancellationException) {
@@ -869,7 +1069,8 @@ class RealTimeAudioDetectionService : Service() {
     }
     
     fun isReadyForAnalysis(): Boolean =
-        isModelLoaded.get() && ortSession != null && lgbmSession != null
+        isModelLoaded.get() && ortSession != null && lgbmSession != null &&
+            mobileNetSession != null && mobileNetV5Session != null
     
     fun getAudioSourceInfo(): String {
         return if (isRecording.get() && audioRecord != null) "Recording active" else "Not recording"
@@ -1033,6 +1234,8 @@ class RealTimeAudioDetectionService : Service() {
         try {
             ortSession?.close()
             lgbmSession?.close()
+            mobileNetSession?.close()
+            mobileNetV5Session?.close()
             ortEnv?.close()
         } catch (e: Exception) {
             Timber.e(e, "Error closing ONNX runtime resources")

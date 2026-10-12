@@ -469,6 +469,10 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         layoutAnalysisResults.visibility = View.VISIBLE
         val lgbmFake = result.lgbmFakeConfidence
         val lgbmIsFake = lgbmFake?.let { it > 0.5f }
+        val mobileNetFake = result.mobileNetFakeConfidence
+        val mobileNetIsFake = mobileNetFake?.let { it > 0.5f }
+        val mobileNetV5Fake = result.mobileNetV5FakeConfidence
+        val mobileNetV5IsFake = mobileNetV5Fake?.let { it > 0.5f }
         val warningThresholdExceeded =
             result.isFake && result.confidence >
                 RealTimeAudioDetectionService.DEEPFAKE_ALERT_CONFIDENCE_THRESHOLD
@@ -478,32 +482,57 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
                 "Decision time: ${formatProcessingTime(result.processingTimeMs)}"
         } else {
             when {
-                lgbmIsFake == null ->
+                lgbmIsFake == null || mobileNetIsFake == null || mobileNetV5IsFake == null ->
                     if (result.isFake) "LIVE CALL: KNN FLAGS FAKE" else "LIVE CALL: KNN FLAGS REAL"
-                result.isFake && lgbmIsFake -> "LIVE CALL: BOTH MODELS FLAG FAKE"
-                !result.isFake && !lgbmIsFake -> "LIVE CALL: BOTH MODELS FLAG REAL"
+                result.isFake == lgbmIsFake && lgbmIsFake == mobileNetIsFake &&
+                    mobileNetIsFake == mobileNetV5IsFake ->
+                    if (result.isFake) "LIVE CALL: ALL FOUR FLAG FAKE" else "LIVE CALL: ALL FOUR FLAG REAL"
                 else -> "LIVE CALL: MODELS DISAGREE"
             }
         }
         tvAnalysisResult.setTextColor(
             ContextCompat.getColor(
                 this,
-                if (result.isFake || lgbmIsFake == true) R.color.error_color else R.color.success_color
+                if (result.isFake || lgbmIsFake == true ||
+                    mobileNetIsFake == true || mobileNetV5IsFake == true
+                ) {
+                    R.color.error_color
+                } else {
+                    R.color.success_color
+                }
             )
         )
         val lgbmScoreLine = lgbmFake?.let {
             val fakePercent = (it * 100).toInt()
             "LightGBM: fake $fakePercent% | real ${100 - fakePercent}%\n"
         }.orEmpty()
+        val mobileNetScoreLine = result.mobileNetFakeConfidence?.let {
+            val fakePercent = (it * 100).toInt()
+            "MobileNetV3: fake $fakePercent% | real ${100 - fakePercent}%\n"
+        }.orEmpty()
+        val mobileNetV5ScoreLine = result.mobileNetV5FakeConfidence?.let {
+            val fakePercent = (it * 100).toInt()
+            "MobileNetV5 (experimental): fake $fakePercent% | real ${100 - fakePercent}%\n"
+        }.orEmpty()
         tvConfidenceScores.text =
-            "KNN: fake $knnFakePercent% | real $knnRealPercent%\n$lgbmScoreLine${result.warning.orEmpty()}"
+            "KNN: fake $knnFakePercent% | real $knnRealPercent%\n" +
+                "$lgbmScoreLine$mobileNetScoreLine$mobileNetV5ScoreLine${result.warning.orEmpty()}"
         val averageProcessingTime = liveProcessingTimesMs.average()
         val maximumProcessingTime = liveProcessingTimesMs.maxOrNull() ?: result.processingTimeMs
+        val modelInferenceTimings = listOfNotNull(
+            result.knnInferenceTimeMs?.let { "KNN: ${formatProcessingTime(it)}" },
+            result.lgbmInferenceTimeMs?.let { "LightGBM: ${formatProcessingTime(it)}" },
+            result.mobileNetInferenceTimeMs?.let { "MobileNetV3: ${formatProcessingTime(it)}" },
+            result.mobileNetV5InferenceTimeMs?.let {
+                "MobileNetV5: ${formatProcessingTime(it)}"
+            }
+        ).joinToString(" | ")
         tvDetectionTiming.text =
             "Latest analysis: ${formatProcessingTime(result.processingTimeMs)} (chunk ${result.audioChunkId})\n" +
                 "Last ${liveProcessingTimesMs.size} chunks: avg ${formatProcessingTime(averageProcessingTime)}, " +
                 "max ${formatProcessingTime(maximumProcessingTime)}\n" +
-                "Timing starts after each 1-second audio chunk is collected."
+                "Model inference: $modelInferenceTimings\n" +
+                "Inference values measure ONNX execution and output parsing."
     }
 
     private fun formatProcessingTime(timeMs: Number): String {
@@ -1120,9 +1149,23 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
     
     private fun displayAnalysisResult(result: RealTimeAudioDetectionService.AudioAnalysisResult) {
         layoutAnalysisResults.visibility = View.VISIBLE
-        tvDetectionTiming.text =
-            "Analysis processing time: ${formatProcessingTime(result.processingTimeMs)}\n" +
-                "Includes feature extraction and both model inferences; excludes audio loading."
+        val modelInferenceTimings = listOfNotNull(
+            result.knnInferenceTimeMs?.let { "KNN: ${formatProcessingTime(it)}" },
+            result.lgbmInferenceTimeMs?.let { "LightGBM: ${formatProcessingTime(it)}" },
+            result.mobileNetInferenceTimeMs?.let { "MobileNetV3: ${formatProcessingTime(it)}" },
+            result.mobileNetV5InferenceTimeMs?.let {
+                "MobileNetV5: ${formatProcessingTime(it)}"
+            }
+        ).joinToString("\n")
+        tvDetectionTiming.text = buildString {
+            append("Total analysis: ${formatProcessingTime(result.processingTimeMs)}")
+            if (modelInferenceTimings.isNotEmpty()) {
+                append("\nPer-model inference time:\n")
+                append(modelInferenceTimings)
+                append("\nMobileNetV3/V5 times sum inference across one-second windows.")
+            }
+            append("\nTotal includes feature extraction; excludes audio loading.")
+        }
         if (result.error != null) {
             tvAnalysisResult.text = "Error"
             tvAnalysisResult.setTextColor(ContextCompat.getColor(this, R.color.error_color))
@@ -1130,18 +1173,26 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
         } else {
             if (result.isFake) {
                 tvAnalysisResult.text = if (result.lgbmFakeConfidence != null) {
-                    if (result.lgbmFakeConfidence > 0.5f) "BOTH MODELS FLAG FAKE" else "MODELS DISAGREE"
+                    if (result.lgbmFakeConfidence > 0.5f &&
+                        result.mobileNetFakeConfidence?.let { it > 0.5f } == true &&
+                        result.mobileNetV5FakeConfidence?.let { it > 0.5f } == true
+                    ) "ALL FOUR MODELS FLAG FAKE" else "MODELS DISAGREE"
                 } else {
                     "KNN FLAGS FAKE"
                 }
                 tvAnalysisResult.setTextColor(ContextCompat.getColor(this, R.color.error_color))
             } else {
                 tvAnalysisResult.text = if (result.lgbmFakeConfidence != null) {
-                    if (result.lgbmFakeConfidence > 0.5f) "MODELS DISAGREE" else "BOTH MODELS FLAG REAL"
+                    if (result.lgbmFakeConfidence > 0.5f ||
+                        result.mobileNetFakeConfidence?.let { it > 0.5f } == true ||
+                        result.mobileNetV5FakeConfidence?.let { it > 0.5f } == true
+                    ) "MODELS DISAGREE" else "ALL FOUR MODELS FLAG REAL"
                 } else {
                     "KNN FLAGS REAL"
                 }
-                val anyModelFlagsFake = result.lgbmFakeConfidence?.let { it > 0.5f } == true
+                val anyModelFlagsFake = result.lgbmFakeConfidence?.let { it > 0.5f } == true ||
+                    result.mobileNetFakeConfidence?.let { it > 0.5f } == true ||
+                    result.mobileNetV5FakeConfidence?.let { it > 0.5f } == true
                 tvAnalysisResult.setTextColor(
                     ContextCompat.getColor(
                         this,
@@ -1156,8 +1207,17 @@ class MainActivity : AppCompatActivity(), ServiceConnection {
                 val lgbmFakePercent = (it * 100).toInt()
                 "LightGBM: fake $lgbmFakePercent% | real ${100 - lgbmFakePercent}%\n"
             }.orEmpty()
-            tvConfidenceScores.text =
-                "KNN: fake $fakePercent% | real $realPercent%\n$lgbmScoreLine$warning"
+            val mobileNetScoreLine = result.mobileNetFakeConfidence?.let {
+                val mobileNetFakePercent = (it * 100).toInt()
+                "MobileNetV3: fake $mobileNetFakePercent% | real ${100 - mobileNetFakePercent}%\n"
+            }.orEmpty()
+            val mobileNetV5ScoreLine = result.mobileNetV5FakeConfidence?.let {
+                val mobileNetV5FakePercent = (it * 100).toInt()
+                "MobileNetV5 (experimental): fake $mobileNetV5FakePercent% | " +
+                    "real ${100 - mobileNetV5FakePercent}%\n"
+            }.orEmpty()
+            tvConfidenceScores.text = "KNN: fake $fakePercent% | real $realPercent%\n" +
+                "$lgbmScoreLine$mobileNetScoreLine$mobileNetV5ScoreLine$warning"
         }
     }
     

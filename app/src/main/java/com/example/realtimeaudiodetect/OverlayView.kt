@@ -70,7 +70,7 @@ class OverlayView @JvmOverloads constructor(
     private var pulseScale = 1f
     private val cornerRadius = 24f
     private val padding = 32f
-    private val chartHeight = 90f
+    private val chartHeight = 70f
     
     init {
         // Setup initial state
@@ -99,7 +99,7 @@ class OverlayView @JvmOverloads constructor(
     
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val width = 400
-        val height = 360
+        val height = 400
         setMeasuredDimension(width, height)
     }
     
@@ -131,6 +131,14 @@ class OverlayView @JvmOverloads constructor(
             val fakePercent = (it * 100).toInt()
             canvas.drawText("LGBM F: $fakePercent% / R: ${100 - fakePercent}%", centerX, 174f, detailPaint)
         }
+        result.mobileNetFakeConfidence?.let {
+            val fakePercent = (it * 100).toInt()
+            canvas.drawText("MobileNetV3 F: $fakePercent% / R: ${100 - fakePercent}%", centerX, 206f, detailPaint)
+        }
+        result.mobileNetV5FakeConfidence?.let {
+            val fakePercent = (it * 100).toInt()
+            canvas.drawText("MobileNetV5 F: $fakePercent% / R: ${100 - fakePercent}%", centerX, 238f, detailPaint)
+        }
         detailPaint.textSize = 32f
     }
     
@@ -140,14 +148,21 @@ class OverlayView @JvmOverloads constructor(
 
         val result = currentResult
         val lgbmFake = result?.lgbmFakeConfidence?.let { it > 0.5f }
+        val mobileNetFake = result?.mobileNetFakeConfidence?.let { it > 0.5f }
+        val mobileNetV5Fake = result?.mobileNetV5FakeConfidence?.let { it > 0.5f }
         val (statusText, statusColor) = when {
             isAnalyzing -> "🔍 ANALYZING" to colorYellow
             result == null -> "⏳ WAITING" to colorGray
-            lgbmFake != null && result.isFake != lgbmFake -> "⚠️ DISAGREE" to colorYellow
-            result.isFake && result.confidence > CONFIDENCE_THRESHOLD ->
-                "⚠️ BOTH FLAG FAKE" to colorRed
-            result.isFake -> "⚠️ BOTH SUSPICIOUS" to colorYellow
-            lgbmFake != null -> "✅ BOTH FLAG REAL" to colorGreen
+            lgbmFake != null && mobileNetFake != null && mobileNetV5Fake != null &&
+                (result.isFake != lgbmFake || result.isFake != mobileNetFake ||
+                    result.isFake != mobileNetV5Fake) ->
+                "⚠️ DISAGREE" to colorYellow
+            result.isFake && lgbmFake == true && mobileNetFake == true && mobileNetV5Fake == true &&
+                result.confidence > CONFIDENCE_THRESHOLD ->
+                "⚠️ ALL FOUR FLAG FAKE" to colorRed
+            result.isFake -> "⚠️ KNN FLAGS FAKE" to colorYellow
+            lgbmFake == false && mobileNetFake == false && mobileNetV5Fake == false ->
+                "✅ ALL FOUR FLAG REAL" to colorGreen
             else -> "✅ KNN FLAGS REAL" to colorGreen
         }
         
@@ -211,7 +226,7 @@ class OverlayView @JvmOverloads constructor(
             currentResult == null -> "Waiting for audio data..."
             else -> {
                 val samples = detectionHistory.size
-                "Experimental KNN + LGBM • Samples: $samples"
+                "Experimental KNN + LGBM + MobileNetV3/V5 • Samples: $samples"
             }
         }
 

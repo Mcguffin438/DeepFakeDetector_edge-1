@@ -39,6 +39,8 @@ class AudioProcessor {
         private const val HOP_LENGTH = 195         // hop_length
         private const val NUM_CHANNELS = 3         // MelSpec, MFCC, LFCC
         private const val N_FILTER = 64           // LFCC filter count
+        private val DFT_COS_TABLE = DoubleArray(FFT_SIZE) { k -> cos(-2.0 * PI * k / FFT_SIZE) }
+        private val DFT_SIN_TABLE = DoubleArray(FFT_SIZE) { k -> sin(-2.0 * PI * k / FFT_SIZE) }
         
         // Mel filter parameters
         private const val MEL_MIN_FREQ = 80f
@@ -62,10 +64,6 @@ class AudioProcessor {
             val N = signal.size
             val result = Array(N) { Complex(0.0, 0.0) }
             
-            // Pre-compute trig tables
-            val cosTable = DoubleArray(N) { k -> cos(-2.0 * PI * k / N) }
-            val sinTable = DoubleArray(N) { k -> sin(-2.0 * PI * k / N) }
-            
             // First half + DC only
             val halfN = N / 2 + 1
             
@@ -75,8 +73,8 @@ class AudioProcessor {
                 
                 for (n in 0 until N) {
                     val tableIndex = (k * n) % N
-                    sumReal += signal[n] * cosTable[tableIndex]
-                    sumImag += signal[n] * sinTable[tableIndex]
+                    sumReal += signal[n] * DFT_COS_TABLE[tableIndex]
+                    sumImag += signal[n] * DFT_SIN_TABLE[tableIndex]
                 }
                 
                 result[k] = Complex(sumReal, sumImag)
@@ -304,6 +302,61 @@ class AudioProcessor {
             KnnFeatureResult(values, chromaStft = chromaMean)
         } else {
             KnnFeatureResult(floatArrayOf(), "Feature extraction produced non-finite values")
+        }
+    }
+
+    fun generateMobileNetFeatures(
+        audioData: ShortArray,
+        sampleRate: Int,
+        channelCount: Int
+    ): MultiChannelFeaturesResult {
+        if (audioData.isEmpty()) {
+            return MultiChannelFeaturesResult(floatArrayOf(), intArrayOf(0, 0, 0), 0, "Audio data is empty")
+        }
+        if (sampleRate != 16000) {
+            return MultiChannelFeaturesResult(floatArrayOf(), intArrayOf(0, 0, 0), 0, "Only 16000Hz audio is supported")
+        }
+        if (channelCount !in 1..2 || audioData.size % channelCount != 0) {
+            return MultiChannelFeaturesResult(floatArrayOf(), intArrayOf(0, 0, 0), 0, "Audio channel layout is invalid")
+        }
+
+        val monoAudio = FloatArray(audioData.size / channelCount) { frame ->
+            var sum = 0f
+            for (channel in 0 until channelCount) {
+                sum += audioData[frame * channelCount + channel].toFloat() / Short.MAX_VALUE
+            }
+            sum / channelCount
+        }
+        val waveform = monoAudio.copyOf(maxOf(FFT_SIZE, monoAudio.size))
+        val stft = computeSTFT(waveform)
+        val melDb = convertToDb(applyMelFilterBank(stft))
+        val mfcc = applyDCT(melDb, NUM_FEATURE_BINS)
+        val lfcc = applyDCT(convertToDb(applyLinearFilterBank(stft)), NUM_FEATURE_BINS)
+        val timeSteps = stft.size
+        val features = FloatArray(NUM_CHANNELS * NUM_FEATURE_BINS * timeSteps)
+        val channels = arrayOf(melDb, mfcc, lfcc)
+
+        channels.forEachIndexed { channel, featureBins ->
+            featureBins.forEachIndexed { bin, frames ->
+                frames.forEachIndexed { time, value ->
+                    features[channel * NUM_FEATURE_BINS * timeSteps + bin * timeSteps + time] = value
+                }
+            }
+        }
+
+        return if (features.all(Float::isFinite)) {
+            MultiChannelFeaturesResult(
+                features = features,
+                shape = intArrayOf(NUM_CHANNELS, NUM_FEATURE_BINS, timeSteps),
+                timeSteps = timeSteps
+            )
+        } else {
+            MultiChannelFeaturesResult(
+                floatArrayOf(),
+                intArrayOf(0, 0, 0),
+                0,
+                "MobileNet feature extraction produced non-finite values"
+            )
         }
     }
 
